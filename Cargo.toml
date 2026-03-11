@@ -1,0 +1,11 @@
+[package]
+name = "strop"
+version = "0.1.0"
+edition = "2024"
+description = "The final sharpening. Replaces Claude Code's constrained file tools with sharp, unrestricted alternatives."
+license = "MIT"
+repository = "https://github.com/coryzibell/strop"
+keywords = ["claude-code", "file-tools", "hooks", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
