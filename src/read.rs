@@ -29,12 +29,14 @@ pub fn read_file(path: &Path, offset: Option<usize>, limit: Option<usize>) -> io
 }
 
 /// Get file metadata for confirmation messages.
+#[cfg(test)]
 pub struct FileInfo {
     pub size: u64,
     pub line_count: usize,
 }
 
 /// Count lines and get size of a file.
+#[cfg(test)]
 pub fn file_info(path: &Path) -> io::Result<FileInfo> {
     let metadata = fs::metadata(path)?;
     let size = metadata.len();

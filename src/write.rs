@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 
-use crate::read::{file_info, format_size};
+use crate::read::format_size;
 
 /// Write content to a file. Creates parent directories if needed.
 /// Returns a confirmation message with file size and line count.
@@ -16,14 +16,15 @@ pub fn write_file(path: &Path, content: &str) -> io::Result<String> {
 
     fs::write(path, content)?;
 
-    let info = file_info(path)?;
-    let size_str = format_size(info.size);
+    let line_count = content.lines().count();
+    let size = content.len() as u64;
+    let size_str = format_size(size);
 
     Ok(format!(
         "Wrote {} ({}, {} lines)",
         path.display(),
         size_str,
-        info.line_count
+        line_count
     ))
 }
 

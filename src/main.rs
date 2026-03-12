@@ -8,9 +8,9 @@ mod write;
 
 use clap::Parser;
 use std::io::{self, IsTerminal, Read};
-use std::process;
+use std::process::ExitCode;
 
-fn main() {
+fn main() -> ExitCode {
     // Detection strategy:
     // 1. If we have CLI args (beyond just the binary name), parse as CLI
     // 2. If stdin is not a terminal AND we have no subcommand args, try hook mode
@@ -23,27 +23,24 @@ fn main() {
 
     // Explicit hook mode: `strop hook`
     if args.len() == 2 && args[1] == "hook" {
-        run_hook_mode();
-        return;
+        return run_hook_mode();
     }
 
     // If we have subcommand args, parse as CLI
     if args.len() > 1 {
-        run_cli_mode();
-        return;
+        return run_cli_mode();
     }
 
     // No args: check if stdin has data (hook invocation without explicit subcommand)
     if !io::stdin().is_terminal() {
-        run_hook_mode();
-        return;
+        return run_hook_mode();
     }
 
     // No args, no stdin: show help
-    run_cli_mode();
+    run_cli_mode()
 }
 
-fn run_cli_mode() {
+fn run_cli_mode() -> ExitCode {
     let cli = cli::Cli::parse();
 
     match cli.command {
@@ -51,57 +48,63 @@ fn run_cli_mode() {
             file,
             offset,
             limit,
-        } => {
-            match read::read_file(&file, offset, limit) {
-                Ok(output) => print!("{output}"),
-                Err(e) => {
-                    eprintln!("strop: {e}");
-                    process::exit(1);
-                }
+        } => match read::read_file(&file, offset, limit) {
+            Ok(output) => {
+                print!("{output}");
+                ExitCode::SUCCESS
             }
-        }
+            Err(e) => {
+                eprintln!("strop: {e}");
+                ExitCode::FAILURE
+            }
+        },
         cli::Command::Write { file } => {
             let content = match write::read_stdin() {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("strop: failed to read stdin: {e}");
-                    process::exit(1);
+                    return ExitCode::FAILURE;
                 }
             };
             match write::write_file(&file, &content) {
-                Ok(msg) => println!("{msg}"),
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
                 Err(e) => {
                     eprintln!("strop: {e}");
-                    process::exit(1);
+                    ExitCode::FAILURE
                 }
             }
         }
-        cli::Command::Install => {
-            match install::install() {
-                Ok(msg) => println!("{msg}"),
-                Err(e) => {
-                    eprintln!("strop: {e}");
-                    process::exit(1);
-                }
+        cli::Command::Install => match install::install() {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
             }
-        }
+            Err(e) => {
+                eprintln!("strop: {e}");
+                ExitCode::FAILURE
+            }
+        },
         cli::Command::Info => {
             print!("{}", info::show());
+            ExitCode::SUCCESS
         }
     }
 }
 
-fn run_hook_mode() {
+fn run_hook_mode() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
         eprintln!("strop hook: failed to read stdin: {e}");
-        process::exit(hook::EXIT_ALLOW);
+        return ExitCode::from(hook::EXIT_ALLOW as u8);
     }
 
     let input = input.trim();
     if input.is_empty() {
         // No input, nothing to do — allow the tool call
-        process::exit(hook::EXIT_ALLOW);
+        return ExitCode::from(hook::EXIT_ALLOW as u8);
     }
 
     let hook_input = match hook::parse_hook_input(input) {
@@ -109,7 +112,7 @@ fn run_hook_mode() {
         Err(e) => {
             eprintln!("strop hook: {e}");
             // Parse failure: allow the builtin to handle it
-            process::exit(hook::EXIT_ALLOW);
+            return ExitCode::from(hook::EXIT_ALLOW as u8);
         }
     };
 
@@ -119,5 +122,5 @@ fn run_hook_mode() {
         print!("{output}");
     }
 
-    process::exit(result.exit_code);
+    ExitCode::from(result.exit_code as u8)
 }

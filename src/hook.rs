@@ -141,7 +141,17 @@ fn process_read(input: &HookInput) -> HookResult {
     }
 
     // Large text file: strop reads it with line numbers
-    match read::read_file(&file_path, None, None) {
+    let offset = input
+        .tool_input
+        .get("offset")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let limit = input
+        .tool_input
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    match read::read_file(&file_path, offset, limit) {
         Ok(content) => {
             let size_str = read::format_size(metadata.len());
             let header = format!(
@@ -389,5 +399,46 @@ mod tests {
         // We can't easily test env var in parallel tests without race conditions
         let val = parse_size("64KB").unwrap();
         assert_eq!(val, 64 * 1024);
+    }
+
+    #[test]
+    fn test_read_large_text_with_offset_and_limit() {
+        let mut f = NamedTempFile::with_suffix(".txt").unwrap();
+        // Write >48KB of numbered lines
+        for i in 1..=500 {
+            let line = format!("line-{i}-{}\n", "x".repeat(95));
+            f.write_all(line.as_bytes()).unwrap();
+        }
+        f.flush().unwrap();
+
+        // Build hook input with numeric offset and limit values
+        let mut tool_input = HashMap::new();
+        tool_input.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(f.path().to_str().unwrap().to_string()),
+        );
+        tool_input.insert(
+            "offset".to_string(),
+            serde_json::json!(100),
+        );
+        tool_input.insert(
+            "limit".to_string(),
+            serde_json::json!(5),
+        );
+        let input = HookInput {
+            tool_name: "Read".to_string(),
+            tool_input,
+        };
+
+        let result = process(&input);
+        assert_eq!(result.exit_code, EXIT_BLOCK);
+        let out = result.output.unwrap();
+
+        // Should contain lines 100-104 (offset=100, limit=5)
+        assert!(out.contains("line-100-"), "should contain line 100");
+        assert!(out.contains("line-104-"), "should contain line 104");
+        // Should NOT contain lines outside the window
+        assert!(!out.contains("line-99-"), "should not contain line 99");
+        assert!(!out.contains("line-105-"), "should not contain line 105");
     }
 }
