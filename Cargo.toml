@@ -1,10 +1,10 @@
 [package]
-name = "strop"
+name = "fettle"
 version = "0.1.0"
 edition = "2024"
-description = "The final sharpening. Replaces Claude Code's constrained file tools with sharp, unrestricted alternatives."
+description = "Put your file tools in fine fettle. Replaces Claude Code's constrained file tools with proper, unrestricted alternatives."
 license = "Apache-2.0"
-repository = "https://github.com/coryzibell/strop"
+repository = "https://github.com/coryzibell/fettle"
 keywords = ["claude-code", "file-tools", "hooks", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 

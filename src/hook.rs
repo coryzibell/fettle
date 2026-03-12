@@ -11,7 +11,7 @@ use crate::write;
 const DEFAULT_THRESHOLD_BYTES: u64 = 48 * 1024;
 
 /// Environment variable to override the threshold.
-const THRESHOLD_ENV: &str = "STROP_READ_THRESHOLD";
+const THRESHOLD_ENV: &str = "FETTLE_READ_THRESHOLD";
 
 /// Hook exit codes.
 /// 0 = allow the original tool call to proceed.
@@ -30,7 +30,7 @@ pub struct HookInput {
 pub struct HookResult {
     /// What to print to stdout (shown to assistant as feedback).
     pub output: Option<String>,
-    /// Exit code: 0 = allow builtin, 2 = block (strop handled it).
+    /// Exit code: 0 = allow builtin, 2 = block (fettle handled it).
     pub exit_code: i32,
 }
 
@@ -94,7 +94,7 @@ fn process_read(input: &HookInput) -> HookResult {
         Some(p) => PathBuf::from(p),
         None => {
             return HookResult {
-                output: Some("strop: Read hook missing file_path".to_string()),
+                output: Some("fettle: Read hook missing file_path".to_string()),
                 exit_code: EXIT_BLOCK,
             };
         }
@@ -124,7 +124,7 @@ fn process_read(input: &HookInput) -> HookResult {
         Err(e) => {
             // File doesn't exist or can't stat — let the builtin handle the error
             return HookResult {
-                output: Some(format!("strop: cannot stat {}: {e}", file_path.display())),
+                output: Some(format!("fettle: cannot stat {}: {e}", file_path.display())),
                 exit_code: EXIT_ALLOW,
             };
         }
@@ -140,7 +140,7 @@ fn process_read(input: &HookInput) -> HookResult {
         };
     }
 
-    // Large text file: strop reads it with line numbers
+    // Large text file: fettle reads it with line numbers
     let offset = input
         .tool_input
         .get("offset")
@@ -155,7 +155,7 @@ fn process_read(input: &HookInput) -> HookResult {
         Ok(content) => {
             let size_str = read::format_size(metadata.len());
             let header = format!(
-                "strop: reading {} ({}, {} detected)\n",
+                "fettle: reading {} ({}, {} detected)\n",
                 file_path.display(),
                 size_str,
                 category
@@ -167,7 +167,7 @@ fn process_read(input: &HookInput) -> HookResult {
         }
         Err(e) => HookResult {
             output: Some(format!(
-                "strop: failed to read {}: {e}",
+                "fettle: failed to read {}: {e}",
                 file_path.display()
             )),
             exit_code: EXIT_BLOCK,
@@ -181,7 +181,7 @@ fn process_write(input: &HookInput) -> HookResult {
         Some(p) => PathBuf::from(p),
         None => {
             return HookResult {
-                output: Some("strop: Write hook missing file_path".to_string()),
+                output: Some("fettle: Write hook missing file_path".to_string()),
                 exit_code: EXIT_BLOCK,
             };
         }
@@ -191,7 +191,7 @@ fn process_write(input: &HookInput) -> HookResult {
         Some(c) => c.to_string(),
         None => {
             return HookResult {
-                output: Some("strop: Write hook missing content".to_string()),
+                output: Some("fettle: Write hook missing content".to_string()),
                 exit_code: EXIT_BLOCK,
             };
         }
@@ -199,12 +199,12 @@ fn process_write(input: &HookInput) -> HookResult {
 
     match write::write_file(&file_path, &content) {
         Ok(msg) => HookResult {
-            output: Some(format!("strop: {msg}")),
+            output: Some(format!("fettle: {msg}")),
             exit_code: EXIT_BLOCK,
         },
         Err(e) => HookResult {
             output: Some(format!(
-                "strop: failed to write {}: {e}",
+                "fettle: failed to write {}: {e}",
                 file_path.display()
             )),
             exit_code: EXIT_BLOCK,
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(result.exit_code, EXIT_BLOCK);
         assert!(result.output.is_some());
         let out = result.output.unwrap();
-        assert!(out.contains("strop: reading"));
+        assert!(out.contains("fettle: reading"));
     }
 
     #[test]
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_read_nonexistent_allows_builtin() {
-        let input = make_hook_input("Read", &[("file_path", "/tmp/nonexistent_strop_test.txt")]);
+        let input = make_hook_input("Read", &[("file_path", "/tmp/nonexistent_fettle_test.txt")]);
         let result = process(&input);
         // Let builtin handle the error
         assert_eq!(result.exit_code, EXIT_ALLOW);
@@ -328,19 +328,19 @@ mod tests {
             "Write",
             &[
                 ("file_path", path.to_str().unwrap()),
-                ("content", "hello from strop\n"),
+                ("content", "hello from fettle\n"),
             ],
         );
         let result = process(&input);
         assert_eq!(result.exit_code, EXIT_BLOCK);
         let out = result.output.unwrap();
-        assert!(out.contains("strop: Wrote"));
+        assert!(out.contains("fettle: Wrote"));
         assert!(out.contains("1 lines"));
 
         // Verify file was actually written
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "hello from strop\n"
+            "hello from fettle\n"
         );
     }
 

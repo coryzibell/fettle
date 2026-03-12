@@ -14,14 +14,14 @@ fn main() -> ExitCode {
     // Detection strategy:
     // 1. If we have CLI args (beyond just the binary name), parse as CLI
     // 2. If stdin is not a terminal AND we have no subcommand args, try hook mode
-    // 3. If called as `strop hook`, explicitly enter hook mode
+    // 3. If called as `fettle hook`, explicitly enter hook mode
     //
-    // The `strop hook` subcommand is what the install script uses.
+    // The `fettle hook` subcommand is what the install script uses.
     // But we also detect bare invocation with piped stdin for robustness.
 
     let args: Vec<String> = std::env::args().collect();
 
-    // Explicit hook mode: `strop hook`
+    // Explicit hook mode: `fettle hook`
     if args.len() == 2 && args[1] == "hook" {
         return run_hook_mode();
     }
@@ -54,7 +54,7 @@ fn run_cli_mode() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                eprintln!("strop: {e}");
+                eprintln!("fettle: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -62,7 +62,7 @@ fn run_cli_mode() -> ExitCode {
             let content = match write::read_stdin() {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("strop: failed to read stdin: {e}");
+                    eprintln!("fettle: failed to read stdin: {e}");
                     return ExitCode::FAILURE;
                 }
             };
@@ -72,7 +72,7 @@ fn run_cli_mode() -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    eprintln!("strop: {e}");
+                    eprintln!("fettle: {e}");
                     ExitCode::FAILURE
                 }
             }
@@ -83,7 +83,7 @@ fn run_cli_mode() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                eprintln!("strop: {e}");
+                eprintln!("fettle: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -97,7 +97,7 @@ fn run_cli_mode() -> ExitCode {
 fn run_hook_mode() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
-        eprintln!("strop hook: failed to read stdin: {e}");
+        eprintln!("fettle hook: failed to read stdin: {e}");
         return ExitCode::from(hook::EXIT_ALLOW as u8);
     }
 
@@ -110,7 +110,7 @@ fn run_hook_mode() -> ExitCode {
     let hook_input = match hook::parse_hook_input(input) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("strop hook: {e}");
+            eprintln!("fettle hook: {e}");
             // Parse failure: allow the builtin to handle it
             return ExitCode::from(hook::EXIT_ALLOW as u8);
         }

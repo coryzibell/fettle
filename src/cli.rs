@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-/// strop -- the final sharpening.
-/// Replaces Claude Code's constrained file tools with sharp, unrestricted alternatives.
+/// fettle -- put your file tools in fine fettle.
+/// Replaces Claude Code's constrained file tools with proper, unrestricted alternatives.
 #[derive(Parser, Debug)]
-#[command(name = "strop", version, about)]
+#[command(name = "fettle", version, about)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -32,9 +32,9 @@ pub enum Command {
         file: PathBuf,
     },
 
-    /// Install strop as Claude Code pre-tool-use hooks.
+    /// Install fettle as Claude Code pre-tool-use hooks.
     Install,
 
-    /// Show strop configuration and status.
+    /// Show fettle configuration and status.
     Info,
 }

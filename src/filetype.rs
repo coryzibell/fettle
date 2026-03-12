@@ -1,13 +1,13 @@
 use std::path::Path;
 
-/// Categories of files strop cares about.
+/// Categories of files fettle cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileCategory {
-    /// Text files — code, config, markup, data formats. Strop handles these.
+    /// Text files — code, config, markup, data formats. Fettle handles these.
     Text,
     /// Images — PNG, JPG, WEBP, etc. Claude's builtin handles these (multimodal).
     Image,
-    /// SVG — technically an image extension, but it's XML text. Strop handles it.
+    /// SVG — technically an image extension, but it's XML text. Fettle handles it.
     Svg,
     /// PDF documents. Claude's builtin handles these.
     Pdf,
@@ -18,7 +18,7 @@ pub enum FileCategory {
 }
 
 impl FileCategory {
-    /// Should strop let the builtin tool handle this file?
+    /// Should fettle let the builtin tool handle this file?
     pub fn allow_builtin(self) -> bool {
         matches!(
             self,
@@ -26,7 +26,7 @@ impl FileCategory {
         )
     }
 
-    /// Is this something strop reads as text?
+    /// Is this something fettle reads as text?
     #[allow(dead_code)]
     pub fn is_text(self) -> bool {
         matches!(self, FileCategory::Text | FileCategory::Svg)
