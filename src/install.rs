@@ -26,17 +26,18 @@ pub fn install() -> Result<String, String> {
     let hook_path = hooks_dir.join("strop");
 
     // Create the hooks directory if needed
-    fs::create_dir_all(&hooks_dir)
-        .map_err(|e| format!("Failed to create hooks directory {}: {e}", hooks_dir.display()))?;
+    fs::create_dir_all(&hooks_dir).map_err(|e| {
+        format!(
+            "Failed to create hooks directory {}: {e}",
+            hooks_dir.display()
+        )
+    })?;
 
-    let strop_bin = strop_binary()
-        .map_err(|e| format!("Failed to determine strop binary path: {e}"))?;
+    let strop_bin =
+        strop_binary().map_err(|e| format!("Failed to determine strop binary path: {e}"))?;
 
     // Create a simple wrapper script that passes stdin through to strop
-    let script = format!(
-        "#!/bin/sh\nexec \"{}\" hook\n",
-        strop_bin.display()
-    );
+    let script = format!("#!/bin/sh\nexec \"{}\" hook\n", strop_bin.display());
 
     fs::write(&hook_path, &script)
         .map_err(|e| format!("Failed to write hook script {}: {e}", hook_path.display()))?;

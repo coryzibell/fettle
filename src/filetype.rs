@@ -20,7 +20,10 @@ pub enum FileCategory {
 impl FileCategory {
     /// Should strop let the builtin tool handle this file?
     pub fn allow_builtin(self) -> bool {
-        matches!(self, FileCategory::Image | FileCategory::Pdf | FileCategory::Notebook)
+        matches!(
+            self,
+            FileCategory::Image | FileCategory::Pdf | FileCategory::Notebook
+        )
     }
 
     /// Is this something strop reads as text?
@@ -51,14 +54,10 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 /// Known binary extensions that aren't text.
 const BINARY_EXTENSIONS: &[&str] = &[
     // Compiled / object
-    "o", "obj", "so", "dylib", "dll", "exe", "bin", "com",
-    // Archives
-    "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "zst",
-    // Media (non-image)
-    "mp3", "mp4", "wav", "flac", "ogg", "avi", "mkv", "mov", "wmv",
-    // Fonts
-    "ttf", "otf", "woff", "woff2",
-    // Other binary
+    "o", "obj", "so", "dylib", "dll", "exe", "bin", "com", // Archives
+    "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "zst", // Media (non-image)
+    "mp3", "mp4", "wav", "flac", "ogg", "avi", "mkv", "mov", "wmv", // Fonts
+    "ttf", "otf", "woff", "woff2", // Other binary
     "wasm", "class", "pyc", "pyo", "sqlite", "db",
 ];
 
@@ -110,11 +109,28 @@ mod tests {
     #[test]
     fn test_common_text_files() {
         let text_paths = [
-            "main.rs", "index.js", "app.py", "config.yaml", "data.json",
-            "Makefile", "Dockerfile", ".gitignore", "README.md", "style.css",
-            "page.html", "query.sql", "build.gradle", "pom.xml", "go.mod",
-            "Cargo.toml", "package.json", "tsconfig.json", "shell.sh",
-            "notes.txt", "CHANGELOG", "LICENSE",
+            "main.rs",
+            "index.js",
+            "app.py",
+            "config.yaml",
+            "data.json",
+            "Makefile",
+            "Dockerfile",
+            ".gitignore",
+            "README.md",
+            "style.css",
+            "page.html",
+            "query.sql",
+            "build.gradle",
+            "pom.xml",
+            "go.mod",
+            "Cargo.toml",
+            "package.json",
+            "tsconfig.json",
+            "shell.sh",
+            "notes.txt",
+            "CHANGELOG",
+            "LICENSE",
         ];
         for name in &text_paths {
             assert_eq!(
@@ -135,7 +151,13 @@ mod tests {
 
     #[test]
     fn test_images_allow_builtin() {
-        let image_paths = ["photo.png", "pic.jpg", "image.jpeg", "hero.webp", "anim.gif"];
+        let image_paths = [
+            "photo.png",
+            "pic.jpg",
+            "image.jpeg",
+            "hero.webp",
+            "anim.gif",
+        ];
         for name in &image_paths {
             let cat = detect(Path::new(name));
             assert_eq!(cat, FileCategory::Image, "{name} should be image");
@@ -157,7 +179,13 @@ mod tests {
 
     #[test]
     fn test_binary_detection() {
-        let binary_paths = ["lib.so", "app.exe", "archive.zip", "font.woff2", "module.wasm"];
+        let binary_paths = [
+            "lib.so",
+            "app.exe",
+            "archive.zip",
+            "font.woff2",
+            "module.wasm",
+        ];
         for name in &binary_paths {
             assert_eq!(
                 detect(Path::new(name)),

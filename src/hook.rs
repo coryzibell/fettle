@@ -166,7 +166,10 @@ fn process_read(input: &HookInput) -> HookResult {
             }
         }
         Err(e) => HookResult {
-            output: Some(format!("strop: failed to read {}: {e}", file_path.display())),
+            output: Some(format!(
+                "strop: failed to read {}: {e}",
+                file_path.display()
+            )),
             exit_code: EXIT_BLOCK,
         },
     }
@@ -200,7 +203,10 @@ fn process_write(input: &HookInput) -> HookResult {
             exit_code: EXIT_BLOCK,
         },
         Err(e) => HookResult {
-            output: Some(format!("strop: failed to write {}: {e}", file_path.display())),
+            output: Some(format!(
+                "strop: failed to write {}: {e}",
+                file_path.display()
+            )),
             exit_code: EXIT_BLOCK,
         },
     }
@@ -417,14 +423,8 @@ mod tests {
             "file_path".to_string(),
             serde_json::Value::String(f.path().to_str().unwrap().to_string()),
         );
-        tool_input.insert(
-            "offset".to_string(),
-            serde_json::json!(100),
-        );
-        tool_input.insert(
-            "limit".to_string(),
-            serde_json::json!(5),
-        );
+        tool_input.insert("offset".to_string(), serde_json::json!(100));
+        tool_input.insert("limit".to_string(), serde_json::json!(5));
         let input = HookInput {
             tool_name: "Read".to_string(),
             tool_input,
