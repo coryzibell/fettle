@@ -13,12 +13,6 @@ const DEFAULT_THRESHOLD_BYTES: u64 = 48 * 1024;
 /// Environment variable to override the threshold.
 const THRESHOLD_ENV: &str = "FETTLE_READ_THRESHOLD";
 
-/// Hook exit codes.
-/// 0 = allow the original tool call to proceed.
-/// 2 = block the original tool call; stdout is shown as feedback.
-pub const EXIT_ALLOW: i32 = 0;
-pub const EXIT_BLOCK: i32 = 2;
-
 /// Claude Code pre-tool-use hook JSON format.
 #[derive(Debug, Deserialize)]
 pub struct HookInput {
@@ -27,11 +21,13 @@ pub struct HookInput {
 }
 
 /// Result of processing a hook.
+///
+/// All hook invocations exit 0. The decision (allow vs deny) is expressed
+/// in JSON on stdout per the Claude Code hooks spec.
 pub struct HookResult {
-    /// What to print to stdout (shown to assistant as feedback).
-    pub output: Option<String>,
-    /// Exit code: 0 = allow builtin, 2 = block (fettle handled it).
-    pub exit_code: i32,
+    /// None = allow (pass through to builtin, no output).
+    /// Some = deny (fettle handled it, content goes into the JSON envelope).
+    pub deny_reason: Option<String>,
 }
 
 /// Get the read threshold from env or default.
@@ -76,10 +72,7 @@ pub fn process(input: &HookInput) -> HookResult {
     match input.tool_name.as_str() {
         "Read" => process_read(input),
         "Write" => process_write(input),
-        _ => HookResult {
-            output: None,
-            exit_code: EXIT_ALLOW,
-        },
+        _ => HookResult { deny_reason: None },
     }
 }
 
@@ -93,10 +86,8 @@ fn process_read(input: &HookInput) -> HookResult {
     let file_path = match get_str_field(input, "file_path") {
         Some(p) => PathBuf::from(p),
         None => {
-            return HookResult {
-                output: Some("fettle: Read hook missing file_path".to_string()),
-                exit_code: EXIT_BLOCK,
-            };
+            // Missing file_path: fail open, let builtin handle the error
+            return HookResult { deny_reason: None };
         }
     };
 
@@ -104,29 +95,20 @@ fn process_read(input: &HookInput) -> HookResult {
 
     // Images, PDFs, notebooks: let the builtin handle them (multimodal)
     if category.allow_builtin() {
-        return HookResult {
-            output: None,
-            exit_code: EXIT_ALLOW,
-        };
+        return HookResult { deny_reason: None };
     }
 
-    // Binary files: warn but allow (the builtin will handle or error as appropriate)
+    // Binary files: allow (the builtin will handle or error as appropriate)
     if category == FileCategory::Binary {
-        return HookResult {
-            output: None,
-            exit_code: EXIT_ALLOW,
-        };
+        return HookResult { deny_reason: None };
     }
 
     // Text/SVG files: check size
     let metadata = match std::fs::metadata(&file_path) {
         Ok(m) => m,
-        Err(e) => {
-            // File doesn't exist or can't stat — let the builtin handle the error
-            return HookResult {
-                output: Some(format!("fettle: cannot stat {}: {e}", file_path.display())),
-                exit_code: EXIT_ALLOW,
-            };
+        Err(_) => {
+            // File doesn't exist or can't stat — fail open, let the builtin handle
+            return HookResult { deny_reason: None };
         }
     };
 
@@ -134,10 +116,7 @@ fn process_read(input: &HookInput) -> HookResult {
 
     if metadata.len() < threshold {
         // Small file: let the builtin handle it (works great under 48KB)
-        return HookResult {
-            output: None,
-            exit_code: EXIT_ALLOW,
-        };
+        return HookResult { deny_reason: None };
     }
 
     // Large text file: fettle reads it with line numbers
@@ -161,17 +140,13 @@ fn process_read(input: &HookInput) -> HookResult {
                 category
             );
             HookResult {
-                output: Some(format!("{header}{content}")),
-                exit_code: EXIT_BLOCK,
+                deny_reason: Some(format!("{header}{content}")),
             }
         }
-        Err(e) => HookResult {
-            output: Some(format!(
-                "fettle: failed to read {}: {e}",
-                file_path.display()
-            )),
-            exit_code: EXIT_BLOCK,
-        },
+        Err(_) => {
+            // Read failure: fail open, let the builtin try
+            HookResult { deny_reason: None }
+        }
     }
 }
 
@@ -181,8 +156,7 @@ fn process_write(input: &HookInput) -> HookResult {
         Some(p) => PathBuf::from(p),
         None => {
             return HookResult {
-                output: Some("fettle: Write hook missing file_path".to_string()),
-                exit_code: EXIT_BLOCK,
+                deny_reason: Some("fettle: Write hook missing file_path".to_string()),
             };
         }
     };
@@ -191,23 +165,20 @@ fn process_write(input: &HookInput) -> HookResult {
         Some(c) => c.to_string(),
         None => {
             return HookResult {
-                output: Some("fettle: Write hook missing content".to_string()),
-                exit_code: EXIT_BLOCK,
+                deny_reason: Some("fettle: Write hook missing content".to_string()),
             };
         }
     };
 
     match write::write_file(&file_path, &content) {
         Ok(msg) => HookResult {
-            output: Some(format!("fettle: {msg}")),
-            exit_code: EXIT_BLOCK,
+            deny_reason: Some(format!("fettle: {msg}")),
         },
         Err(e) => HookResult {
-            output: Some(format!(
+            deny_reason: Some(format!(
                 "fettle: failed to write {}: {e}",
                 file_path.display()
             )),
-            exit_code: EXIT_BLOCK,
         },
     }
 }
@@ -249,21 +220,21 @@ mod tests {
     fn test_read_image_allows_builtin() {
         let input = make_hook_input("Read", &[("file_path", "/tmp/photo.png")]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_ALLOW);
+        assert!(result.deny_reason.is_none());
     }
 
     #[test]
     fn test_read_pdf_allows_builtin() {
         let input = make_hook_input("Read", &[("file_path", "/tmp/doc.pdf")]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_ALLOW);
+        assert!(result.deny_reason.is_none());
     }
 
     #[test]
     fn test_read_notebook_allows_builtin() {
         let input = make_hook_input("Read", &[("file_path", "/tmp/nb.ipynb")]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_ALLOW);
+        assert!(result.deny_reason.is_none());
     }
 
     #[test]
@@ -274,11 +245,11 @@ mod tests {
 
         let input = make_hook_input("Read", &[("file_path", f.path().to_str().unwrap())]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_ALLOW);
+        assert!(result.deny_reason.is_none());
     }
 
     #[test]
-    fn test_read_large_text_blocks() {
+    fn test_read_large_text_denies_with_content() {
         let mut f = NamedTempFile::with_suffix(".txt").unwrap();
         // Write >48KB of content
         let line = "x".repeat(100) + "\n";
@@ -289,10 +260,9 @@ mod tests {
 
         let input = make_hook_input("Read", &[("file_path", f.path().to_str().unwrap())]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_BLOCK);
-        assert!(result.output.is_some());
-        let out = result.output.unwrap();
-        assert!(out.contains("fettle: reading"));
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("fettle: reading"));
     }
 
     #[test]
@@ -307,21 +277,21 @@ mod tests {
 
         let input = make_hook_input("Read", &[("file_path", f.path().to_str().unwrap())]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_BLOCK);
-        let out = result.output.unwrap();
-        assert!(out.contains("svg detected"));
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("svg detected"));
     }
 
     #[test]
     fn test_read_nonexistent_allows_builtin() {
         let input = make_hook_input("Read", &[("file_path", "/tmp/nonexistent_fettle_test.txt")]);
         let result = process(&input);
-        // Let builtin handle the error
-        assert_eq!(result.exit_code, EXIT_ALLOW);
+        // Fail open: let builtin handle the error
+        assert!(result.deny_reason.is_none());
     }
 
     #[test]
-    fn test_write_always_blocks() {
+    fn test_write_denies_with_confirmation() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("output.txt");
         let input = make_hook_input(
@@ -332,10 +302,10 @@ mod tests {
             ],
         );
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_BLOCK);
-        let out = result.output.unwrap();
-        assert!(out.contains("fettle: Wrote"));
-        assert!(out.contains("1 lines"));
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("fettle: Wrote"));
+        assert!(reason.contains("1 lines"));
 
         // Verify file was actually written
         assert_eq!(
@@ -356,7 +326,7 @@ mod tests {
             ],
         );
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_BLOCK);
+        assert!(result.deny_reason.is_some());
         assert!(path.exists());
     }
 
@@ -364,15 +334,15 @@ mod tests {
     fn test_write_missing_content() {
         let input = make_hook_input("Write", &[("file_path", "/tmp/test.txt")]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_BLOCK);
-        assert!(result.output.unwrap().contains("missing content"));
+        assert!(result.deny_reason.is_some());
+        assert!(result.deny_reason.unwrap().contains("missing content"));
     }
 
     #[test]
     fn test_unknown_tool_allows() {
         let input = make_hook_input("Bash", &[("command", "echo hi")]);
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_ALLOW);
+        assert!(result.deny_reason.is_none());
     }
 
     #[test]
@@ -431,14 +401,14 @@ mod tests {
         };
 
         let result = process(&input);
-        assert_eq!(result.exit_code, EXIT_BLOCK);
-        let out = result.output.unwrap();
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
 
         // Should contain lines 100-104 (offset=100, limit=5)
-        assert!(out.contains("line-100-"), "should contain line 100");
-        assert!(out.contains("line-104-"), "should contain line 104");
+        assert!(reason.contains("line-100-"), "should contain line 100");
+        assert!(reason.contains("line-104-"), "should contain line 104");
         // Should NOT contain lines outside the window
-        assert!(!out.contains("line-99-"), "should not contain line 99");
-        assert!(!out.contains("line-105-"), "should not contain line 105");
+        assert!(!reason.contains("line-99-"), "should not contain line 99");
+        assert!(!reason.contains("line-105-"), "should not contain line 105");
     }
 }

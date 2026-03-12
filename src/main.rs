@@ -98,13 +98,14 @@ fn run_hook_mode() -> ExitCode {
     let mut input = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut input) {
         eprintln!("fettle hook: failed to read stdin: {e}");
-        return ExitCode::from(hook::EXIT_ALLOW as u8);
+        // Fail open: exit 0 with no stdout = allow
+        return ExitCode::SUCCESS;
     }
 
     let input = input.trim();
     if input.is_empty() {
         // No input, nothing to do — allow the tool call
-        return ExitCode::from(hook::EXIT_ALLOW as u8);
+        return ExitCode::SUCCESS;
     }
 
     let hook_input = match hook::parse_hook_input(input) {
@@ -112,15 +113,25 @@ fn run_hook_mode() -> ExitCode {
         Err(e) => {
             eprintln!("fettle hook: {e}");
             // Parse failure: allow the builtin to handle it
-            return ExitCode::from(hook::EXIT_ALLOW as u8);
+            return ExitCode::SUCCESS;
         }
     };
 
     let result = hook::process(&hook_input);
 
-    if let Some(output) = result.output {
+    if let Some(reason) = result.deny_reason {
+        // Deny: emit the JSON envelope on stdout
+        let output = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason
+            }
+        });
         print!("{output}");
     }
+    // Allow: print nothing
 
-    ExitCode::from(result.exit_code as u8)
+    // All hook responses exit 0
+    ExitCode::SUCCESS
 }
