@@ -1,0 +1,9 @@
+name: follow the white rabbit.
+on:
+  push:
+    tags: ['v*']
+jobs:
+  release:
+    uses: coryzibell/nebuchadnezzar/.github/workflows/follow-the-white-rabbit.yml@main
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}

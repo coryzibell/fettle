@@ -1,0 +1,9 @@
+name: knock, knock.
+on:
+  release:
+    types: [published]
+jobs:
+  publish:
+    uses: coryzibell/nebuchadnezzar/.github/workflows/knock-knock.yml@main
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

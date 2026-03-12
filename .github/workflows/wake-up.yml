@@ -1,0 +1,14 @@
+name: wake up.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: write
+jobs:
+  ci:
+    uses: coryzibell/nebuchadnezzar/.github/workflows/wake-up.yml@main
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
