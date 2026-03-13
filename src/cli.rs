@@ -37,4 +37,29 @@ pub enum Command {
 
     /// Show fettle configuration and status.
     Info,
+
+    /// Apply a staged Tier 2 write.
+    Confirm {
+        /// The session ID to confirm
+        session_id: String,
+    },
+
+    /// Discard a staged write without applying.
+    Discard {
+        /// The session ID to discard
+        session_id: String,
+    },
+
+    /// Restore a file from a backup.
+    Rollback {
+        /// Backup path or filename
+        backup: String,
+
+        /// Override the restore target path
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
+
+    /// Show pending staged sessions and recent backups.
+    Status,
 }
