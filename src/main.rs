@@ -128,6 +128,11 @@ fn run_cli_mode() -> ExitCode {
             print_status();
             ExitCode::SUCCESS
         }
+        cli::Command::Hook => {
+            // Normally intercepted by the early detection in main(),
+            // but handle here for completeness if clap parses it.
+            run_hook_mode()
+        }
     }
 }
 
