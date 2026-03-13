@@ -3,6 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// Default TTL for staged sessions in seconds (10 minutes).
 const DEFAULT_STAGE_TTL_SECS: u64 = 600;
 
@@ -49,41 +52,38 @@ fn stage_ttl_secs() -> u64 {
         .unwrap_or(DEFAULT_STAGE_TTL_SECS)
 }
 
-/// Generate an 8-character hex session ID from timestamp and file path.
+/// Generate a session ID, checking for collisions against a specific directory.
 ///
-/// Uses XOR-folding of timestamp nanos and path bytes to produce a 32-bit
-/// value, formatted as 8 hex characters. Not cryptographically random -- just
-/// unique enough to avoid collisions in practice.
-pub fn generate_session_id(file_path: &str) -> String {
+/// Uses XOR-folding of timestamp nanos, path bytes, and process ID to produce
+/// a 32-bit value, formatted as 8 hex characters. Not cryptographically random
+/// -- just unique enough to avoid collisions in practice.
+///
+/// If the resulting session directory already exists (e.g., two writes to the
+/// same file in the same nanosecond), the hash is incremented until a free
+/// slot is found.
+fn generate_session_id_in(file_path: &str, base_dir: &Path) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
 
+    let pid = std::process::id();
+
     let mut hash: u32 = (nanos & 0xFFFFFFFF) as u32 ^ ((nanos >> 32) & 0xFFFFFFFF) as u32;
+    hash = hash.wrapping_mul(31).wrapping_add(pid);
 
     for byte in file_path.bytes() {
         hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
     }
 
-    format!("{hash:08x}")
-}
-
-/// Format a SystemTime as ISO 8601 string.
-fn format_iso8601(time: SystemTime) -> String {
-    let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = duration.as_secs();
-    let millis = duration.subsec_millis();
-
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    let (year, month, day) = crate::backup::days_to_date(days);
-
-    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}.{millis:03}Z")
+    // Check for collision: if the directory already exists, increment until free.
+    loop {
+        let id = format!("{hash:08x}");
+        if !base_dir.join(&id).exists() {
+            return id;
+        }
+        hash = hash.wrapping_add(1);
+    }
 }
 
 /// Parse an ISO 8601 timestamp string back to epoch seconds.
@@ -145,7 +145,7 @@ fn stage_write_in(
     diff_summary: &str,
     base_dir: &Path,
 ) -> Result<String, String> {
-    let session_id = generate_session_id(file_path);
+    let session_id = generate_session_id_in(file_path, base_dir);
     let dir = base_dir.join(&session_id);
 
     fs::create_dir_all(&dir).map_err(|e| {
@@ -154,6 +154,13 @@ fn stage_write_in(
             dir.display()
         )
     })?;
+
+    // Restrict permissions: staged content may contain secrets
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(base_dir, fs::Permissions::from_mode(0o700));
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+    }
 
     // Write proposed content
     let content_path = dir.join("content");
@@ -165,7 +172,7 @@ fn stage_write_in(
         session_id: session_id.clone(),
         target_path: file_path.to_string(),
         backup_path: backup_path.map(|s| s.to_string()),
-        created_at: format_iso8601(SystemTime::now()),
+        created_at: crate::backup::format_iso8601(SystemTime::now()),
         diff_summary: diff_summary.to_string(),
         status: SessionStatus::Pending,
     };
@@ -351,13 +358,21 @@ fn purge_expired_sessions_in(dir: &Path, ttl: u64) {
     }
 }
 
+/// Summary of a pending staged session for display.
+pub struct PendingSession {
+    pub session_id: String,
+    pub target_path: String,
+    pub diff_summary: String,
+    pub age: String,
+}
+
 /// List pending staged sessions for status display.
-pub fn list_pending_sessions() -> Vec<(String, String, String, String)> {
+pub fn list_pending_sessions() -> Vec<PendingSession> {
     list_pending_sessions_in(&stage_dir())
 }
 
 /// List pending staged sessions in a specific directory.
-fn list_pending_sessions_in(dir: &Path) -> Vec<(String, String, String, String)> {
+fn list_pending_sessions_in(dir: &Path) -> Vec<PendingSession> {
     if !dir.exists() {
         return Vec::new();
     }
@@ -368,7 +383,7 @@ fn list_pending_sessions_in(dir: &Path) -> Vec<(String, String, String, String)>
     };
 
     let now = SystemTime::now();
-    let mut sessions: Vec<(String, String, String, String, SystemTime)> = Vec::new();
+    let mut sessions: Vec<(PendingSession, SystemTime)> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -399,21 +414,20 @@ fn list_pending_sessions_in(dir: &Path) -> Vec<(String, String, String, String)>
                 .unwrap_or_else(|_| "unknown".to_string());
 
             sessions.push((
-                session.session_id,
-                session.target_path,
-                session.diff_summary,
-                age,
+                PendingSession {
+                    session_id: session.session_id,
+                    target_path: session.target_path,
+                    diff_summary: session.diff_summary,
+                    age,
+                },
                 modified,
             ));
         }
     }
 
-    sessions.sort_by(|a, b| b.4.cmp(&a.4));
+    sessions.sort_by(|a, b| b.1.cmp(&a.1));
 
-    sessions
-        .into_iter()
-        .map(|(id, path, summary, age, _)| (id, path, summary, age))
-        .collect()
+    sessions.into_iter().map(|(s, _)| s).collect()
 }
 
 #[cfg(test)]
@@ -423,7 +437,8 @@ mod tests {
 
     #[test]
     fn test_session_id_is_8_char_hex() {
-        let id = generate_session_id("/home/user/test.rs");
+        let dir = TempDir::new().unwrap();
+        let id = generate_session_id_in("/home/user/test.rs", dir.path());
         assert_eq!(id.len(), 8);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -571,5 +586,43 @@ mod tests {
 
         let sessions = list_pending_sessions_in(&stage_d);
         assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn test_discard_expired_session_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let stage_d = dir.path().join("stage");
+
+        let session_id =
+            stage_write_in("/tmp/test.rs", "content", None, "+1 -0", &stage_d).unwrap();
+
+        // Manually expire the session
+        let session_dir = stage_d.join(&session_id);
+        let meta_path = session_dir.join("metadata.json");
+        let meta_str = fs::read_to_string(&meta_path).unwrap();
+        let mut session: StagedSession = serde_json::from_str(&meta_str).unwrap();
+        session.created_at = "2020-01-01T00:00:00.000Z".to_string();
+        let json = serde_json::to_string_pretty(&session).unwrap();
+        fs::write(&meta_path, json).unwrap();
+
+        // Discarding an expired session should succeed (harmless cleanup)
+        let msg = discard_in(&session_id, &stage_d).unwrap();
+        assert!(msg.contains("Discarded"));
+        assert!(!session_dir.exists());
+    }
+
+    #[test]
+    fn test_session_id_collision_avoidance() {
+        let dir = TempDir::new().unwrap();
+        let stage_d = dir.path().join("stage");
+        fs::create_dir_all(&stage_d).unwrap();
+
+        // Generate a session ID, then create its directory to simulate a collision
+        let id1 = generate_session_id_in("/tmp/test.rs", &stage_d);
+        fs::create_dir_all(stage_d.join(&id1)).unwrap();
+
+        // Next generation for the same path should produce a different ID
+        let id2 = generate_session_id_in("/tmp/test.rs", &stage_d);
+        assert_ne!(id1, id2);
     }
 }

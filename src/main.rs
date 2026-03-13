@@ -147,16 +147,19 @@ fn print_status() {
 
     if !sessions.is_empty() {
         println!("Pending staged writes:");
-        for (id, path, summary, age) in &sessions {
-            println!("  {id}  {path:<45} {summary:<10} {age}");
+        for s in &sessions {
+            println!(
+                "  {}  {:<45} {:<10} {}",
+                s.session_id, s.target_path, s.diff_summary, s.age
+            );
         }
         println!();
     }
 
     if !backups.is_empty() {
         println!("Recent backups (last 24h):");
-        for (name, original, age) in &backups {
-            println!("  {name:<40} {original:<45} {age}");
+        for b in &backups {
+            println!("  {:<40} {:<45} {}", b.backup_name, b.original_path, b.age);
         }
     }
 }

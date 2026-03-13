@@ -610,24 +610,22 @@ main.rs
                         To discard: run `fettle discard {id}` via Bash"
 ```
 
-### Important: The "deny" is still "ask"
+### The permission decision is "deny"
 
-The current code uses `permissionDecision: "ask"` (not `"deny"`), which allows
-users with auto-approve to pass through cleanly. This continues unchanged.
-The enhanced protocol still performs its work before returning the ask decision.
-For Tier 2, the file is NOT written -- only staged. The ask response contains
-the diff and instructions.
+The code uses `permissionDecision: "deny"`. This is deliberate and correct.
+When fettle handles a Write, it has already either written the file (Tier 1)
+or staged it (Tier 2). Returning "deny" tells Claude Code not to also run
+its builtin Write tool, which would cause a double-write.
 
-Note: When auto-approve passes through a Tier 2 response, Claude Code's
-builtin Write will also execute (since `ask` was auto-approved). This means
-the file gets written by the builtin. This is actually fine -- the staged
-content and the builtin write will contain the same content (both came from
-the same tool_input). The staging becomes redundant in auto-approve scenarios,
-which is the correct behavior: auto-approve means "just do it."
+Claude sees the deny reason as an "error" message, but the message itself
+confirms the operation succeeded (e.g., `fettle: Wrote /path (+3 -1)`).
+The "error" IS the success confirmation. This is how the hook protocol is
+designed to work -- the deny reason is the communication channel.
 
-When auto-approve is NOT set and the user denies the ask, the file remains
-unwritten and the staged session sits waiting for `fettle confirm`. This is
-exactly the desired flow.
+For Tier 2 (staged writes), the deny reason contains the diff and
+instructions to run `fettle confirm` or `fettle discard`. The file is NOT
+written until confirmed. The deny prevents the builtin from writing it
+prematurely.
 
 ---
 
@@ -906,7 +904,8 @@ Decision tree:
 
 The enhanced write protocol is backward compatible in the following sense:
 
-- The hook still returns `permissionDecision: "ask"` with a reason string.
+- The hook returns `permissionDecision: "deny"` with a reason string that
+  serves as the success confirmation (see section 9 for rationale).
 - The reason string format changes (adds diff info, backup paths) but the
   model already parses these as informational messages.
 - New CLI subcommands (confirm, discard, rollback, status) don't conflict

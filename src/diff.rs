@@ -19,10 +19,11 @@ impl DiffResult {
     }
 
     /// Changed lines as a fraction of the original file size.
-    /// Returns 0.0 for empty files (prevents division by zero).
+    /// Returns 1.0 for empty files (100% change) so that large writes to
+    /// empty files get proper threshold scrutiny rather than bypassing it.
     pub fn change_ratio(&self) -> f64 {
         if self.old_line_count == 0 {
-            0.0
+            if self.changed_lines() > 0 { 1.0 } else { 0.0 }
         } else {
             self.changed_lines() as f64 / self.old_line_count as f64
         }
@@ -61,9 +62,11 @@ impl Default for WriteThresholds {
 
 impl WriteThresholds {
     /// Load thresholds from environment variables, falling back to defaults.
+    ///
+    /// If floor >= ceiling, logs a warning and swaps them.
     pub fn from_env() -> Self {
         let defaults = Self::default();
-        Self {
+        let mut result = Self {
             absolute_floor: env::var("FETTLE_WRITE_FLOOR")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -76,7 +79,17 @@ impl WriteThresholds {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(defaults.ratio_threshold),
+        };
+
+        if result.absolute_floor >= result.absolute_ceil {
+            eprintln!(
+                "fettle: warning: FETTLE_WRITE_FLOOR ({}) >= FETTLE_WRITE_CEIL ({}), swapping",
+                result.absolute_floor, result.absolute_ceil
+            );
+            std::mem::swap(&mut result.absolute_floor, &mut result.absolute_ceil);
         }
+
+        result
     }
 
     /// Classify a diff result into a write tier.
@@ -198,7 +211,7 @@ mod tests {
         assert_eq!(diff.insertions, 3);
         assert_eq!(diff.deletions, 0);
         assert_eq!(diff.old_line_count, 0);
-        assert_eq!(diff.change_ratio(), 0.0); // no division by zero
+        assert_eq!(diff.change_ratio(), 1.0); // empty file with insertions = 100% change
     }
 
     #[test]

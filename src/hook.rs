@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::backup;
 use crate::diff;
@@ -182,181 +182,231 @@ fn process_write(input: &HookInput) -> HookResult {
         }
     };
 
+    if !file_path.exists() {
+        write_new_file(&file_path, &content)
+    } else {
+        write_existing_file(&file_path, &content)
+    }
+}
+
+/// Write a new file (no existing content on disk).
+fn write_new_file(file_path: &Path, content: &str) -> HookResult {
+    let file_path_str = file_path.to_string_lossy();
+    let line_count = content.lines().count();
+    let size_str = read::format_size(content.len() as u64);
+
+    match write::write_file(file_path, content) {
+        Ok(_) => HookResult {
+            deny_reason: Some(format!(
+                "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines) [new file]"
+            )),
+        },
+        Err(e) => HookResult {
+            deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
+        },
+    }
+}
+
+/// Write to an existing file: diff, backup, classify tier, and apply or stage.
+fn write_existing_file(file_path: &Path, content: &str) -> HookResult {
     let file_path_str = file_path.to_string_lossy().to_string();
     let line_count = content.lines().count();
-    let size = content.len() as u64;
-    let size_str = read::format_size(size);
+    let size_str = read::format_size(content.len() as u64);
 
-    // Check if file exists
-    if !file_path.exists() {
-        // New file: write directly
-        match write::write_file(&file_path, &content) {
-            Ok(_) => HookResult {
-                deny_reason: Some(format!(
-                    "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines) [new file]"
-                )),
-            },
-            Err(e) => HookResult {
-                deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
-            },
+    // Read current content
+    let existing = match std::fs::read(file_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            // Cannot read existing file: write anyway without diff/backup
+            return write_and_deny(
+                file_path,
+                content,
+                &format!(
+                    "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines) [no backup: read failed]"
+                ),
+            );
         }
-    } else {
-        // Existing file: read current content
-        let existing = match std::fs::read(&file_path) {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                // Cannot read existing file: write anyway without diff/backup
-                return match write::write_file(&file_path, &content) {
-                    Ok(_) => HookResult {
-                        deny_reason: Some(format!(
-                            "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines) [no backup: read failed]"
-                        )),
-                    },
-                    Err(e) => HookResult {
-                        deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
-                    },
-                };
-            }
-        };
+    };
 
-        // No-change fast path: byte-level comparison
-        if existing == content.as_bytes() {
-            return HookResult {
-                deny_reason: Some(format!(
-                    "fettle: No changes to {file_path_str} (content identical)"
-                )),
-            };
+    // No-change fast path: byte-level comparison
+    if existing == content.as_bytes() {
+        return HookResult {
+            deny_reason: Some(format!(
+                "fettle: No changes to {file_path_str} (content identical)"
+            )),
+        };
+    }
+
+    // Check if existing content is valid UTF-8 for diffing
+    let existing_str = match std::str::from_utf8(&existing) {
+        Ok(s) => s,
+        Err(_) => {
+            return write_with_backup_no_diff(
+                file_path,
+                content,
+                &existing,
+                &format!(
+                    "fettle: Wrote {file_path_str} ({size_str}, binary content, diff skipped)"
+                ),
+            );
         }
+    };
 
-        // Check if existing content is valid UTF-8 for diffing
-        let existing_str = match std::str::from_utf8(&existing) {
-            Ok(s) => s,
-            Err(_) => {
-                // Non-UTF-8 (binary) content: backup + write directly, skip diff
-                backup::purge_old_backups();
-                let backup_info = backup::create_backup(&file_path, &existing);
-                let backup_msg = backup_info
-                    .as_ref()
-                    .map(|b| format!("\n  backup: {}", b.backup_filename))
-                    .unwrap_or_default();
+    // Check file size for diff skip
+    if existing.len() as u64 > MAX_DIFF_FILE_SIZE {
+        return write_with_backup_no_diff(
+            file_path,
+            content,
+            &existing,
+            &format!(
+                "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines, diff skipped: file >5MB)"
+            ),
+        );
+    }
 
-                return match write::write_file(&file_path, &content) {
-                    Ok(_) => HookResult {
-                        deny_reason: Some(format!(
-                            "fettle: Wrote {file_path_str} ({size_str}, binary content, diff skipped){backup_msg}"
-                        )),
-                    },
-                    Err(e) => HookResult {
-                        deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
-                    },
-                };
+    // Compute diff
+    let diff_result = diff::compute_diff(existing_str, content, &file_path_str);
+
+    // Opportunistic backup purge + create backup
+    backup::purge_old_backups();
+    let backup_info = backup::create_backup(file_path, &existing);
+    let backup_msg = backup_info
+        .as_ref()
+        .map(|b| format!("\n  backup: {}", b.backup_filename))
+        .unwrap_or_default();
+
+    // Classify tier
+    let thresholds = diff::WriteThresholds::from_env();
+    match thresholds.classify(&diff_result) {
+        diff::WriteTier::DirectWrite => apply_tier1(
+            file_path,
+            content,
+            &diff_result,
+            &size_str,
+            line_count,
+            &backup_msg,
+        ),
+        diff::WriteTier::StagedWrite => {
+            apply_tier2(file_path, content, &diff_result, &backup_info, &backup_msg)
+        }
+    }
+}
+
+/// Tier 1: write directly with diff summary.
+fn apply_tier1(
+    file_path: &Path,
+    content: &str,
+    diff_result: &diff::DiffResult,
+    size_str: &str,
+    line_count: usize,
+    backup_msg: &str,
+) -> HookResult {
+    let file_path_str = file_path.to_string_lossy();
+    match write::write_file(file_path, content) {
+        Ok(_) => HookResult {
+            deny_reason: Some(format!(
+                "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines, {} changed){backup_msg}",
+                diff_result.summary()
+            )),
+        },
+        Err(e) => HookResult {
+            deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
+        },
+    }
+}
+
+/// Tier 2: stage for confirmation with diff display.
+fn apply_tier2(
+    file_path: &Path,
+    content: &str,
+    diff_result: &diff::DiffResult,
+    backup_info: &Option<backup::BackupResult>,
+    backup_msg: &str,
+) -> HookResult {
+    let file_path_str = file_path.to_string_lossy().to_string();
+    let size_str = read::format_size(content.len() as u64);
+    let line_count = content.lines().count();
+
+    stage::purge_expired_sessions();
+
+    let backup_path_str = backup_info
+        .as_ref()
+        .map(|b| b.backup_path.to_string_lossy().to_string());
+
+    let diff_summary = diff_result.summary();
+    let change_pct = (diff_result.change_ratio() * 100.0) as usize;
+
+    match stage::stage_write(
+        &file_path_str,
+        content,
+        backup_path_str.as_deref(),
+        &diff_summary,
+    ) {
+        Ok(session_id) => {
+            let diff_display = diff::truncate_diff(&diff_result.unified);
+            HookResult {
+                deny_reason: Some(format!(
+                    "fettle: Staged write for {file_path_str} (session: {session_id})\n  \
+                     {} lines changed ({change_pct}% of file){backup_msg}\n\n\
+                     {diff_display}\n\n\
+                     To apply: run `fettle confirm {session_id}` via Bash\n\
+                     To discard: run `fettle discard {session_id}` via Bash",
+                    diff_summary
+                )),
             }
-        };
-
-        // Check file size for diff skip
-        if existing.len() as u64 > MAX_DIFF_FILE_SIZE {
-            backup::purge_old_backups();
-            let backup_info = backup::create_backup(&file_path, &existing);
-            let backup_msg = backup_info
-                .as_ref()
-                .map(|b| format!("\n  backup: {}", b.backup_filename))
-                .unwrap_or_default();
-
-            return match write::write_file(&file_path, &content) {
+        }
+        Err(_) => {
+            // Stage failure: fall back to direct write (Tier 1 behavior)
+            match write::write_file(file_path, content) {
                 Ok(_) => HookResult {
                     deny_reason: Some(format!(
-                        "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines, diff skipped: file >5MB){backup_msg}"
+                        "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines, {} changed) [staging failed, wrote directly]{backup_msg}",
+                        diff_result.summary()
                     )),
                 },
                 Err(e) => HookResult {
                     deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
                 },
-            };
-        }
-
-        // Compute diff
-        let diff_result = diff::compute_diff(existing_str, &content, &file_path_str);
-
-        // Opportunistic backup purge
-        backup::purge_old_backups();
-
-        // Create backup
-        let backup_info = backup::create_backup(&file_path, &existing);
-        let backup_msg = backup_info
-            .as_ref()
-            .map(|b| format!("\n  backup: {}", b.backup_filename))
-            .unwrap_or_default();
-
-        // Classify tier
-        let thresholds = diff::WriteThresholds::from_env();
-        match thresholds.classify(&diff_result) {
-            diff::WriteTier::DirectWrite => {
-                // Tier 1: write directly
-                match write::write_file(&file_path, &content) {
-                    Ok(_) => HookResult {
-                        deny_reason: Some(format!(
-                            "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines, {} changed){backup_msg}",
-                            diff_result.summary()
-                        )),
-                    },
-                    Err(e) => HookResult {
-                        deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
-                    },
-                }
-            }
-            diff::WriteTier::StagedWrite => {
-                // Tier 2: stage for confirmation
-                stage::purge_expired_sessions();
-
-                let backup_path_str = backup_info
-                    .as_ref()
-                    .map(|b| b.backup_path.to_string_lossy().to_string());
-
-                let diff_summary = diff_result.summary();
-                let change_pct = if diff_result.old_line_count > 0 {
-                    (diff_result.change_ratio() * 100.0) as usize
-                } else {
-                    100
-                };
-
-                match stage::stage_write(
-                    &file_path_str,
-                    &content,
-                    backup_path_str.as_deref(),
-                    &diff_summary,
-                ) {
-                    Ok(session_id) => {
-                        let diff_display = diff::truncate_diff(&diff_result.unified);
-                        HookResult {
-                            deny_reason: Some(format!(
-                                "fettle: Staged write for {file_path_str} (session: {session_id})\n  \
-                                 {} lines changed ({change_pct}% of file){backup_msg}\n\n\
-                                 {diff_display}\n\n\
-                                 To apply: run `fettle confirm {session_id}` via Bash\n\
-                                 To discard: run `fettle discard {session_id}` via Bash",
-                                diff_summary
-                            )),
-                        }
-                    }
-                    Err(_) => {
-                        // Stage failure: fall back to direct write (Tier 1 behavior)
-                        match write::write_file(&file_path, &content) {
-                            Ok(_) => HookResult {
-                                deny_reason: Some(format!(
-                                    "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines, {} changed) [staging failed, wrote directly]{backup_msg}",
-                                    diff_result.summary()
-                                )),
-                            },
-                            Err(e) => HookResult {
-                                deny_reason: Some(format!(
-                                    "fettle: failed to write {file_path_str}: {e}"
-                                )),
-                            },
-                        }
-                    }
-                }
             }
         }
+    }
+}
+
+/// Write a file and return a deny with the given message.
+fn write_and_deny(file_path: &Path, content: &str, success_msg: &str) -> HookResult {
+    let file_path_str = file_path.to_string_lossy();
+    match write::write_file(file_path, content) {
+        Ok(_) => HookResult {
+            deny_reason: Some(success_msg.to_string()),
+        },
+        Err(e) => HookResult {
+            deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
+        },
+    }
+}
+
+/// Backup the existing content and write without computing a diff.
+fn write_with_backup_no_diff(
+    file_path: &Path,
+    content: &str,
+    existing: &[u8],
+    success_prefix: &str,
+) -> HookResult {
+    let file_path_str = file_path.to_string_lossy();
+    backup::purge_old_backups();
+    let backup_info = backup::create_backup(file_path, existing);
+    let backup_msg = backup_info
+        .as_ref()
+        .map(|b| format!("\n  backup: {}", b.backup_filename))
+        .unwrap_or_default();
+
+    match write::write_file(file_path, content) {
+        Ok(_) => HookResult {
+            deny_reason: Some(format!("{success_prefix}{backup_msg}")),
+        },
+        Err(e) => HookResult {
+            deny_reason: Some(format!("fettle: failed to write {file_path_str}: {e}")),
+        },
     }
 }
 
@@ -535,6 +585,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_write_small_diff() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("small_diff.txt");
@@ -577,6 +628,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_write_large_diff_stages() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("large_diff.txt");

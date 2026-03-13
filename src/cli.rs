@@ -25,8 +25,10 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Read a file with cat -n style line numbers. No size limits.
-    #[command(long_about = "Read a file and print it with cat -n style line numbers.\n\n\
-        No size limits. Use --offset and --limit to read a specific range of lines.")]
+    #[command(
+        long_about = "Read a file and print it with cat -n style line numbers.\n\n\
+        No size limits. Use --offset and --limit to read a specific range of lines."
+    )]
     Read {
         /// Path to the file to read
         file: PathBuf,
@@ -50,11 +52,13 @@ pub enum Command {
     },
 
     /// Run as a Claude Code PreToolUse hook (reads JSON from stdin).
-    #[command(long_about = "Run in hook mode for Claude Code's PreToolUse hook system.\n\n\
+    #[command(
+        long_about = "Run in hook mode for Claude Code's PreToolUse hook system.\n\n\
         Reads a JSON tool call payload from stdin, decides whether to handle it \
         or pass through to the builtin, and writes the hook response to stdout.\n\n\
         This is called by the hook script installed via `fettle install`. \
-        You do not normally run this manually.")]
+        You do not normally run this manually."
+    )]
     Hook,
 
     /// Install fettle as a Claude Code pre-tool-use hook.
@@ -65,10 +69,12 @@ pub enum Command {
     Install,
 
     /// Show fettle configuration and status.
-    #[command(long_about = "Show current fettle configuration and installation status.\n\n\
+    #[command(
+        long_about = "Show current fettle configuration and installation status.\n\n\
         Displays: hook installation path, read threshold, write thresholds \
         (floor/ceiling/ratio), backup directory, staging directory, and \
-        the full decision tree summary.")]
+        the full decision tree summary."
+    )]
     Info,
 
     /// Apply a staged write after reviewing the diff.

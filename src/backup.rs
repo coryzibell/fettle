@@ -67,7 +67,7 @@ pub(crate) fn days_to_date(days: u64) -> (i64, u64, u64) {
 }
 
 /// Format a SystemTime as ISO 8601 string.
-fn format_iso8601(time: SystemTime) -> String {
+pub(crate) fn format_iso8601(time: SystemTime) -> String {
     let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = duration.as_secs();
     let millis = duration.subsec_millis();
@@ -280,13 +280,20 @@ pub fn rollback(backup: &str, to_override: Option<&Path>) -> Result<String, Stri
     ))
 }
 
+/// Summary of a recent backup for display.
+pub struct RecentBackup {
+    pub backup_name: String,
+    pub original_path: String,
+    pub age: String,
+}
+
 /// List recent backups for status display.
-pub fn list_recent_backups() -> Vec<(String, String, String)> {
+pub fn list_recent_backups() -> Vec<RecentBackup> {
     list_recent_backups_in(&backup_dir())
 }
 
 /// List recent backups in a specific directory.
-fn list_recent_backups_in(dir: &Path) -> Vec<(String, String, String)> {
+fn list_recent_backups_in(dir: &Path) -> Vec<RecentBackup> {
     if !dir.exists() {
         return Vec::new();
     }
@@ -297,7 +304,7 @@ fn list_recent_backups_in(dir: &Path) -> Vec<(String, String, String)> {
     };
 
     let now = SystemTime::now();
-    let mut backups: Vec<(String, String, String, SystemTime)> = Vec::new();
+    let mut backups: Vec<(RecentBackup, SystemTime)> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -322,16 +329,20 @@ fn list_recent_backups_in(dir: &Path) -> Vec<(String, String, String)> {
         };
 
         let age = format_age(now, modified);
-        backups.push((name, original, age, modified));
+        backups.push((
+            RecentBackup {
+                backup_name: name,
+                original_path: original,
+                age,
+            },
+            modified,
+        ));
     }
 
     // Sort by time, newest first
-    backups.sort_by(|a, b| b.3.cmp(&a.3));
+    backups.sort_by(|a, b| b.1.cmp(&a.1));
 
-    backups
-        .into_iter()
-        .map(|(name, original, age, _)| (name, original, age))
-        .collect()
+    backups.into_iter().map(|(b, _)| b).collect()
 }
 
 /// Format the age of a timestamp relative to now in human-readable form.
