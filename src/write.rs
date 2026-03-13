@@ -6,6 +6,11 @@ use crate::read::format_size;
 
 /// Write content to a file. Creates parent directories if needed.
 /// Returns a confirmation message with file size and line count.
+///
+/// Note: the hook path (hook.rs) constructs its own confirmation messages
+/// and ignores the returned string. The CLI path (main.rs) uses it.
+/// This is acceptable -- the return value serves the CLI, while the hook
+/// path needs richer context than a simple message can provide.
 pub fn write_file(path: &Path, content: &str) -> io::Result<String> {
     // Create parent directories if they don't exist
     if let Some(parent) = path.parent()
