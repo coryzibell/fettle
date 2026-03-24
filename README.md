@@ -46,13 +46,40 @@ cargo install fettle
 fettle install
 ```
 
-`fettle install` creates a hook script at `~/.claude/hooks/pre-tool-use/fettle` that pipes Claude Code's tool call JSON to `fettle hook`. That is the entire setup.
+`fettle install` does two things:
 
-To verify:
+1. **Registers the hook in `~/.claude/settings.json`** (primary method) -- adds a `PreToolUse` hook entry that runs `fettle hook` for `Read`, `Write`, and `Edit` tool calls.
+2. **Creates a legacy hook script** at `~/.claude/hooks/pre-tool-use/fettle` for backwards compatibility with older Claude Code versions.
+
+The settings.json entry looks like this:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fettle hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+If you prefer manual configuration, add that snippet to your `~/.claude/settings.json` instead of running `fettle install`.
+
+To verify installation:
 
 ```bash
 fettle info
 ```
+
+`fettle info` reports the status of both installation methods (settings.json and legacy script), along with current configuration.
 
 ## How It Works
 
@@ -162,7 +189,7 @@ You do not call this manually. The hook script does it.
 
 ### `fettle install`
 
-Install fettle as a Claude Code pre-tool-use hook. Creates an executable script at `~/.claude/hooks/pre-tool-use/fettle` that invokes `fettle hook`.
+Install fettle as a Claude Code pre-tool-use hook. Registers the hook in `~/.claude/settings.json` (primary) and creates a legacy hook script at `~/.claude/hooks/pre-tool-use/fettle` (backwards compatibility). Safe to re-run.
 
 ```bash
 fettle install
@@ -176,7 +203,7 @@ Show current configuration, installation status, and the decision tree summary.
 fettle info
 ```
 
-Output includes: hook installation path, read threshold, write thresholds (floor/ceiling/ratio), backup directory, and staging directory.
+Output includes: settings.json hook status, legacy script status, read threshold, write thresholds (floor/ceiling/ratio), backup directory, and staging directory.
 
 ### `fettle confirm <session-id>`
 
