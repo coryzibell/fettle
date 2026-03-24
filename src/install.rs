@@ -65,12 +65,8 @@ fn inject_settings_json() -> Result<bool, String> {
 
     // Ensure ~/.claude/ directory exists
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "Failed to create directory {}: {e}",
-                parent.display()
-            )
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
     }
 
     // Read existing file or start with empty object
@@ -136,8 +132,8 @@ fn inject_settings_json() -> Result<bool, String> {
         .push(fettle_hook_entry());
 
     // Write back with pretty formatting (2-space indent)
-    let formatted =
-        serde_json::to_string_pretty(&root).map_err(|e| format!("Failed to serialize JSON: {e}"))?;
+    let formatted = serde_json::to_string_pretty(&root)
+        .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
     let formatted = formatted + "\n";
 
     fs::write(&path, formatted.as_bytes())
@@ -209,9 +205,7 @@ pub fn install() -> Result<String, String> {
         hook_path.display()
     ));
     msg.push_str(&format!("  Binary:   {}\n", fettle_bin.display()));
-    msg.push_str(
-        "\nfettle will now intercept Read, Write, and Edit tool calls in Claude Code.\n",
-    );
+    msg.push_str("\nfettle will now intercept Read, Write, and Edit tool calls in Claude Code.\n");
 
     Ok(msg)
 }
@@ -331,7 +325,10 @@ mod tests {
 
             let path = home.join(".claude").join("settings.json");
             let contents = fs::read_to_string(path).unwrap();
-            assert!(contents.ends_with('\n'), "settings.json should end with a trailing newline");
+            assert!(
+                contents.ends_with('\n'),
+                "settings.json should end with a trailing newline"
+            );
             let root: Value = serde_json::from_str(&contents).unwrap();
             assert!(has_fettle_hook(&root["hooks"]["PreToolUse"]));
         });
@@ -398,11 +395,7 @@ mod tests {
             let claude_dir = home.join(".claude");
             fs::create_dir_all(&claude_dir).unwrap();
             let settings = claude_dir.join("settings.json");
-            fs::write(
-                &settings,
-                r#"{"hooks": {"PreToolUse": "not an array"}}"#,
-            )
-            .unwrap();
+            fs::write(&settings, r#"{"hooks": {"PreToolUse": "not an array"}}"#).unwrap();
 
             let result = inject_settings_json();
             assert!(result.is_err());
