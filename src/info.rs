@@ -8,12 +8,28 @@ pub fn show() -> String {
 
     out.push_str("fettle -- in fine fettle\n\n");
 
-    // Installation status
-    let (installed, hook_path) = install::status();
-    if installed {
-        out.push_str(&format!("Hook: installed at {}\n", hook_path.display()));
+    // Installation status: settings.json method
+    let settings_installed = install::settings_json_installed();
+    if settings_installed {
+        out.push_str("Hook (settings.json): installed\n");
     } else {
-        out.push_str("Hook: not installed (run `fettle install`)\n");
+        out.push_str("Hook (settings.json): not found\n");
+    }
+
+    // Installation status: legacy script method
+    let (script_installed, hook_path) = install::script_installed();
+    if script_installed {
+        out.push_str(&format!(
+            "Hook (script):        installed at {}\n",
+            hook_path.display()
+        ));
+    } else {
+        out.push_str("Hook (script):        not found\n");
+    }
+
+    // Hint if neither is installed
+    if !settings_installed && !script_installed {
+        out.push_str("  (run `fettle install` to set up hooks)\n");
     }
 
     // Threshold config
