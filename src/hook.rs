@@ -279,26 +279,22 @@ fn process_edit(input: &HookInput) -> HookResult {
     let occurrence_count = existing_str.matches(&old_string).count();
 
     if occurrence_count == 0 {
-        // Provide helpful context: show nearby lines
-        let context = find_near_match_context(&existing_str, &old_string);
+        // Claude Code validates this before the hook fires, so this is defense-in-depth.
+        // For detailed diagnostics, use: fettle edit-diagnose <file> <search_string>
         return HookResult {
             deny_reason: Some(format!(
-                "fettle: Edit failed -- old_string not found in {}\n\
-                 Searched for ({} chars): {:?}\n\
-                 {context}",
-                file_path.display(),
-                old_string.len(),
-                truncate_str(&old_string, 200),
+                "fettle: Edit failed -- old_string not found in {}",
+                file_path.display()
             )),
         };
     }
 
     // If replace_all is false, old_string must be unique
     if !replace_all && occurrence_count > 1 {
+        // Claude Code validates this before the hook fires, so this is defense-in-depth.
         return HookResult {
             deny_reason: Some(format!(
-                "fettle: Edit failed -- old_string appears {occurrence_count} times in {} (ambiguous match). \
-                 Use replace_all=true to replace all occurrences, or provide a longer old_string with more context to make it unique.",
+                "fettle: Edit failed -- old_string matches {occurrence_count} locations in {}",
                 file_path.display()
             )),
         };
@@ -314,57 +310,6 @@ fn process_edit(input: &HookInput) -> HookResult {
 
     // Feed through the shared write protocol
     apply_write_with_protocol(&file_path, &new_content, &existing_bytes)
-}
-
-/// Find context near where old_string might be in the file.
-/// Shows the first few lines of the file to help the agent orient.
-fn find_near_match_context(content: &str, old_string: &str) -> String {
-    let lines: Vec<&str> = content.lines().collect();
-    let total = lines.len();
-
-    // Try to find the first line of old_string as a partial match
-    let first_line_of_search = old_string.lines().next().unwrap_or(old_string);
-    let trimmed_search = first_line_of_search.trim();
-
-    if !trimmed_search.is_empty() {
-        for (i, line) in lines.iter().enumerate() {
-            if line.contains(trimmed_search) {
-                let start = i.saturating_sub(2);
-                let end = (i + 3).min(total);
-                let snippet: Vec<String> = lines[start..end]
-                    .iter()
-                    .enumerate()
-                    .map(|(j, l)| format!("  {:>4}| {l}", start + j + 1))
-                    .collect();
-                return format!(
-                    "Partial match near line {} of {total}:\n{}",
-                    i + 1,
-                    snippet.join("\n")
-                );
-            }
-        }
-    }
-
-    // No partial match found, show the first few lines for orientation
-    let preview_count = 10.min(total);
-    let snippet: Vec<String> = lines[..preview_count]
-        .iter()
-        .enumerate()
-        .map(|(i, l)| format!("  {:>4}| {l}", i + 1))
-        .collect();
-    format!(
-        "File has {total} lines. First {preview_count}:\n{}",
-        snippet.join("\n")
-    )
-}
-
-/// Truncate a string for display, appending "..." if truncated.
-fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len])
-    }
 }
 
 /// Write a new file (no existing content on disk).
@@ -1066,8 +1011,7 @@ mod tests {
         let result = process(&input);
         assert!(result.deny_reason.is_some());
         let reason = result.deny_reason.unwrap();
-        assert!(reason.contains("3 times"));
-        assert!(reason.contains("ambiguous"));
+        assert!(reason.contains("3 locations"));
     }
 
     #[test]

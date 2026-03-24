@@ -32,8 +32,8 @@ fettle installs as a Claude Code `PreToolUse` hook. It intercepts `Read`, `Write
 
 **Edits -- no read-before-edit required:**
 - fettle reads the file itself, validates the replacement, and applies it
-- `old_string` must exist in the file (helpful error with context if not found)
-- If `replace_all` is false (default), `old_string` must be unique (error with occurrence count if ambiguous)
+- `old_string` must exist in the file (brief error if not found; use `fettle edit-diagnose` for detailed diagnostics)
+- If `replace_all` is false (default), `old_string` must be unique
 - After computing the replacement, the result goes through the same diff/backup/tier protocol as Write
 - Agents can call Edit without a prior Read -- fettle handles the file access
 
@@ -125,10 +125,11 @@ old_string == new_string?
   --> Skip. Return "no changes" message. Done.
 
 old_string not found in file?
-  --> Deny with error + context snippet to help the agent find the right text.
+  --> Deny with brief error (defense-in-depth; Claude Code catches this first).
+      For diagnostics, use: fettle edit-diagnose <file> <search_string>
 
 replace_all is false and old_string appears more than once?
-  --> Deny with error + occurrence count. Agent must provide more context or use replace_all.
+  --> Deny with brief error (defense-in-depth; Claude Code catches this first).
 
 Otherwise:
   --> Apply replacement (all occurrences if replace_all, otherwise the single match)
@@ -270,6 +271,19 @@ Write content from stdin to a file. Creates parent directories if needed. Also u
 
 ```bash
 echo "new content" | fettle write output.txt
+```
+
+### `fettle edit-diagnose <file> <search_string>`
+
+Diagnose why an Edit tool search string was not found. When Claude Code's Edit tool reports "String to replace not found", run this command to understand why.
+
+- If the string is found: reports exact match location(s) with line numbers and surrounding context
+- If not found: searches for near-matches (first line as substring), shows context, and suggests common causes (whitespace, indentation, line endings)
+- If multiple matches: reports all locations and suggests using `replace_all` or adding more context
+
+```bash
+fettle edit-diagnose src/main.rs 'fn main() {'
+fettle edit-diagnose src/lib.rs 'impl MyStruct'
 ```
 
 ## Configuration
