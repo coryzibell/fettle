@@ -91,6 +91,16 @@ fn run_cli_mode() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        cli::Command::Uninstall => match install::uninstall() {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("fettle: {e}");
+                ExitCode::FAILURE
+            }
+        },
         cli::Command::Info => {
             print!("{}", info::show());
             ExitCode::SUCCESS
