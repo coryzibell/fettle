@@ -42,6 +42,8 @@ pub fn show() -> String {
     out.push_str("  Write + new file           -> fettle writes directly\n");
     out.push_str("  Write + small diff         -> fettle writes, backs up original\n");
     out.push_str("  Write + large diff         -> fettle stages, shows diff, waits for confirm\n");
+    out.push_str("  Edit (any)                 -> fettle reads file, validates, applies edit\n");
+    out.push_str("                                (same backup/diff/tier protocol as Write)\n");
     out.push_str("  Other tools                -> allow (pass through)\n");
 
     out

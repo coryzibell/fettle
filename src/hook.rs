@@ -78,6 +78,7 @@ pub fn process(input: &HookInput) -> HookResult {
     match input.tool_name.as_str() {
         "Read" => process_read(input),
         "Write" => process_write(input),
+        "Edit" => process_edit(input),
         _ => HookResult { deny_reason: None },
     }
 }
@@ -189,6 +190,183 @@ fn process_write(input: &HookInput) -> HookResult {
     }
 }
 
+/// Process an Edit tool call.
+///
+/// The Edit tool sends `file_path`, `old_string`, `new_string`, and optionally `replace_all`.
+/// Unlike Write, Edit MUST operate on an existing file. fettle reads the file itself, validates
+/// the replacement, applies it, and feeds the result through the same write protocol as Write.
+/// This means agents can call Edit without needing a prior Read.
+fn process_edit(input: &HookInput) -> HookResult {
+    let file_path = match get_str_field(input, "file_path") {
+        Some(p) => PathBuf::from(p),
+        None => {
+            return HookResult {
+                deny_reason: Some("fettle: Edit hook missing file_path".to_string()),
+            };
+        }
+    };
+
+    let old_string = match get_str_field(input, "old_string") {
+        Some(s) => s.to_string(),
+        None => {
+            return HookResult {
+                deny_reason: Some("fettle: Edit hook missing old_string".to_string()),
+            };
+        }
+    };
+
+    let new_string = match get_str_field(input, "new_string") {
+        Some(s) => s.to_string(),
+        None => {
+            return HookResult {
+                deny_reason: Some("fettle: Edit hook missing new_string".to_string()),
+            };
+        }
+    };
+
+    let replace_all = input
+        .tool_input
+        .get("replace_all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Edit requires the file to exist
+    if !file_path.exists() {
+        return HookResult {
+            deny_reason: Some(format!(
+                "fettle: Edit failed -- file does not exist: {}",
+                file_path.display()
+            )),
+        };
+    }
+
+    // Read current file content
+    let existing_bytes = match std::fs::read(&file_path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return HookResult {
+                deny_reason: Some(format!(
+                    "fettle: Edit failed -- cannot read {}: {e}",
+                    file_path.display()
+                )),
+            };
+        }
+    };
+
+    let existing_str = match std::str::from_utf8(&existing_bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            return HookResult {
+                deny_reason: Some(format!(
+                    "fettle: Edit failed -- {} is not valid UTF-8 text",
+                    file_path.display()
+                )),
+            };
+        }
+    };
+
+    // No-op check: old_string == new_string
+    if old_string == new_string {
+        return HookResult {
+            deny_reason: Some(format!(
+                "fettle: Edit skipped -- old_string and new_string are identical, no changes to {}",
+                file_path.display()
+            )),
+        };
+    }
+
+    // Check that old_string exists in the file
+    let occurrence_count = existing_str.matches(&old_string).count();
+
+    if occurrence_count == 0 {
+        // Provide helpful context: show nearby lines
+        let context = find_near_match_context(&existing_str, &old_string);
+        return HookResult {
+            deny_reason: Some(format!(
+                "fettle: Edit failed -- old_string not found in {}\n\
+                 Searched for ({} chars): {:?}\n\
+                 {context}",
+                file_path.display(),
+                old_string.len(),
+                truncate_str(&old_string, 200),
+            )),
+        };
+    }
+
+    // If replace_all is false, old_string must be unique
+    if !replace_all && occurrence_count > 1 {
+        return HookResult {
+            deny_reason: Some(format!(
+                "fettle: Edit failed -- old_string appears {occurrence_count} times in {} (ambiguous match). \
+                 Use replace_all=true to replace all occurrences, or provide a longer old_string with more context to make it unique.",
+                file_path.display()
+            )),
+        };
+    }
+
+    // Apply the replacement
+    let new_content = if replace_all {
+        existing_str.replace(&old_string, &new_string)
+    } else {
+        // Replace only the first (and only) occurrence
+        existing_str.replacen(&old_string, &new_string, 1)
+    };
+
+    // Feed through the shared write protocol
+    apply_write_with_protocol(&file_path, &new_content, &existing_bytes)
+}
+
+/// Find context near where old_string might be in the file.
+/// Shows the first few lines of the file to help the agent orient.
+fn find_near_match_context(content: &str, old_string: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+
+    // Try to find the first line of old_string as a partial match
+    let first_line_of_search = old_string.lines().next().unwrap_or(old_string);
+    let trimmed_search = first_line_of_search.trim();
+
+    if !trimmed_search.is_empty() {
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains(trimmed_search) {
+                let start = i.saturating_sub(2);
+                let end = (i + 3).min(total);
+                let snippet: Vec<String> = lines[start..end]
+                    .iter()
+                    .enumerate()
+                    .map(|(j, l)| format!("  {:>4}| {l}", start + j + 1))
+                    .collect();
+                return format!(
+                    "Partial match near line {} of {total}:\n{}",
+                    i + 1,
+                    snippet.join("\n")
+                );
+            }
+        }
+    }
+
+    // No partial match found, show the first few lines for orientation
+    let preview_count = 10.min(total);
+    let snippet: Vec<String> = lines[..preview_count]
+        .iter()
+        .enumerate()
+        .map(|(i, l)| format!("  {:>4}| {l}", i + 1))
+        .collect();
+    format!(
+        "File has {total} lines. First {preview_count}:\n{}",
+        snippet.join("\n")
+    )
+}
+
+/// Truncate a string for display, appending "..." if truncated.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
+    }
+}
+
 /// Write a new file (no existing content on disk).
 fn write_new_file(file_path: &Path, content: &str) -> HookResult {
     let file_path_str = file_path.to_string_lossy();
@@ -237,14 +415,31 @@ fn write_existing_file(file_path: &Path, content: &str) -> HookResult {
         };
     }
 
+    apply_write_with_protocol(file_path, content, &existing)
+}
+
+/// Shared write protocol for existing files: diff, backup, classify tier, and apply or stage.
+///
+/// Used by both `process_write` (for existing files) and `process_edit` (after computing
+/// the replacement content). The caller is responsible for reading the file and validating
+/// that the new content actually differs from the original.
+fn apply_write_with_protocol(
+    file_path: &Path,
+    new_content: &str,
+    original_bytes: &[u8],
+) -> HookResult {
+    let file_path_str = file_path.to_string_lossy().to_string();
+    let line_count = new_content.lines().count();
+    let size_str = read::format_size(new_content.len() as u64);
+
     // Check if existing content is valid UTF-8 for diffing
-    let existing_str = match std::str::from_utf8(&existing) {
+    let existing_str = match std::str::from_utf8(original_bytes) {
         Ok(s) => s,
         Err(_) => {
             return write_with_backup_no_diff(
                 file_path,
-                content,
-                &existing,
+                new_content,
+                original_bytes,
                 &format!(
                     "fettle: Wrote {file_path_str} ({size_str}, binary content, diff skipped)"
                 ),
@@ -253,11 +448,11 @@ fn write_existing_file(file_path: &Path, content: &str) -> HookResult {
     };
 
     // Check file size for diff skip
-    if existing.len() as u64 > MAX_DIFF_FILE_SIZE {
+    if original_bytes.len() as u64 > MAX_DIFF_FILE_SIZE {
         return write_with_backup_no_diff(
             file_path,
-            content,
-            &existing,
+            new_content,
+            original_bytes,
             &format!(
                 "fettle: Wrote {file_path_str} ({size_str}, {line_count} lines, diff skipped: file >5MB)"
             ),
@@ -265,11 +460,11 @@ fn write_existing_file(file_path: &Path, content: &str) -> HookResult {
     }
 
     // Compute diff
-    let diff_result = diff::compute_diff(existing_str, content, &file_path_str);
+    let diff_result = diff::compute_diff(existing_str, new_content, &file_path_str);
 
     // Opportunistic backup purge + create backup
     backup::purge_old_backups();
-    let backup_info = backup::create_backup(file_path, &existing);
+    let backup_info = backup::create_backup(file_path, original_bytes);
     let backup_msg = backup_info
         .as_ref()
         .map(|b| format!("\n  backup: {}", b.backup_filename))
@@ -280,15 +475,19 @@ fn write_existing_file(file_path: &Path, content: &str) -> HookResult {
     match thresholds.classify(&diff_result) {
         diff::WriteTier::DirectWrite => apply_tier1(
             file_path,
-            content,
+            new_content,
             &diff_result,
             &size_str,
             line_count,
             &backup_msg,
         ),
-        diff::WriteTier::StagedWrite => {
-            apply_tier2(file_path, content, &diff_result, &backup_info, &backup_msg)
-        }
+        diff::WriteTier::StagedWrite => apply_tier2(
+            file_path,
+            new_content,
+            &diff_result,
+            &backup_info,
+            &backup_msg,
+        ),
     }
 }
 
@@ -751,5 +950,154 @@ mod tests {
         // Should NOT contain lines outside the window
         assert!(!reason.contains("line-99-"), "should not contain line 99");
         assert!(!reason.contains("line-105-"), "should not contain line 105");
+    }
+
+    // ---- Edit tests ----
+
+    fn make_edit_input(
+        file_path: &str,
+        old_string: &str,
+        new_string: &str,
+        replace_all: Option<bool>,
+    ) -> HookInput {
+        let mut tool_input = HashMap::new();
+        tool_input.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(file_path.to_string()),
+        );
+        tool_input.insert(
+            "old_string".to_string(),
+            serde_json::Value::String(old_string.to_string()),
+        );
+        tool_input.insert(
+            "new_string".to_string(),
+            serde_json::Value::String(new_string.to_string()),
+        );
+        if let Some(ra) = replace_all {
+            tool_input.insert("replace_all".to_string(), serde_json::Value::Bool(ra));
+        }
+        HookInput {
+            tool_name: "Edit".to_string(),
+            tool_input,
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_edit_basic_replacement() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("edit_basic.txt");
+        let backup_dir = dir.path().join("backups");
+        unsafe {
+            std::env::set_var("FETTLE_BACKUP_DIR", backup_dir.to_str().unwrap());
+        }
+
+        let original = "line1\nline2\nline3\nline4\nline5\n";
+        std::fs::write(&path, original).unwrap();
+
+        let input = make_edit_input(path.to_str().unwrap(), "line2", "modified", None);
+        let result = process(&input);
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("fettle: Wrote") || reason.contains("fettle: Staged"));
+
+        // Verify file was edited
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("modified"));
+        assert!(!content.contains("line2"));
+        // Other lines unchanged
+        assert!(content.contains("line1"));
+        assert!(content.contains("line3"));
+
+        unsafe {
+            std::env::remove_var("FETTLE_BACKUP_DIR");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_edit_replace_all() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("edit_replace_all.txt");
+        let backup_dir = dir.path().join("backups");
+        unsafe {
+            std::env::set_var("FETTLE_BACKUP_DIR", backup_dir.to_str().unwrap());
+        }
+
+        let original = "foo bar foo baz foo\n";
+        std::fs::write(&path, original).unwrap();
+
+        let input = make_edit_input(path.to_str().unwrap(), "foo", "qux", Some(true));
+        let result = process(&input);
+        assert!(result.deny_reason.is_some());
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "qux bar qux baz qux\n");
+        assert!(!content.contains("foo"));
+
+        unsafe {
+            std::env::remove_var("FETTLE_BACKUP_DIR");
+        }
+    }
+
+    #[test]
+    fn test_edit_old_string_not_found() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("edit_not_found.txt");
+        let original = "line1\nline2\nline3\n";
+        std::fs::write(&path, original).unwrap();
+
+        let input = make_edit_input(path.to_str().unwrap(), "nonexistent", "replacement", None);
+        let result = process(&input);
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("not found"));
+        assert!(reason.contains("edit_not_found.txt"));
+    }
+
+    #[test]
+    fn test_edit_ambiguous_match() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("edit_ambiguous.txt");
+        let original = "hello world\nhello world\nhello world\n";
+        std::fs::write(&path, original).unwrap();
+
+        let input = make_edit_input(path.to_str().unwrap(), "hello world", "goodbye", None);
+        let result = process(&input);
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("3 times"));
+        assert!(reason.contains("ambiguous"));
+    }
+
+    #[test]
+    fn test_edit_no_op_same_strings() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("edit_noop.txt");
+        let original = "some content\n";
+        std::fs::write(&path, original).unwrap();
+
+        let input = make_edit_input(path.to_str().unwrap(), "content", "content", None);
+        let result = process(&input);
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("identical") || reason.contains("no changes"));
+
+        // File should be unchanged
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn test_edit_file_does_not_exist() {
+        let input = make_edit_input(
+            "/tmp/fettle_nonexistent_edit_test_file.txt",
+            "old",
+            "new",
+            None,
+        );
+        let result = process(&input);
+        assert!(result.deny_reason.is_some());
+        let reason = result.deny_reason.unwrap();
+        assert!(reason.contains("does not exist"));
     }
 }

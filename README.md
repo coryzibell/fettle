@@ -4,18 +4,19 @@
 
 ## The Problem
 
-Claude Code's built-in `Read` and `Write` tools have artificial limits:
+Claude Code's built-in `Read`, `Write`, and `Edit` tools have artificial limits:
 
 - **Read** fails on text files over 25,000 tokens (~1,500 lines of code) or 256KB
 - **Read** silently truncates files between 48-126KB to a 2KB preview
 - **Write** refuses to write if you haven't `Read` the file first in the current session -- burning tokens on a mandatory read-before-write round trip
+- **Edit** refuses to edit if you haven't `Read` the file first in the current session -- same mandatory read-before-edit round trip
 - The docs claim lines over 2,000 characters are truncated. [They aren't.](https://github.com/coryzibell/fettle/issues/1)
 
 Images, PDFs, and notebooks are unaffected. The limits only hit text files, which is most of what coding agents work with.
 
 ## What fettle Does
 
-fettle installs as a Claude Code `PreToolUse` hook. It intercepts `Read` and `Write` tool calls transparently:
+fettle installs as a Claude Code `PreToolUse` hook. It intercepts `Read`, `Write`, and `Edit` tool calls transparently:
 
 **Reads:**
 - Text files >= 48KB: fettle reads them directly, no token limits, no size caps
@@ -29,7 +30,14 @@ fettle installs as a Claude Code `PreToolUse` hook. It intercepts `Read` and `Wr
 - **Small diffs**: backed up, written, diff summary returned
 - **Large diffs**: backed up, staged for review, diff displayed, user confirms or discards
 
-Agents do not need to change anything. They call `Read` and `Write` as normal. fettle makes them work better.
+**Edits -- no read-before-edit required:**
+- fettle reads the file itself, validates the replacement, and applies it
+- `old_string` must exist in the file (helpful error with context if not found)
+- If `replace_all` is false (default), `old_string` must be unique (error with occurrence count if ambiguous)
+- After computing the replacement, the result goes through the same diff/backup/tier protocol as Write
+- Agents can call Edit without a prior Read -- fettle handles the file access
+
+Agents do not need to change anything. They call `Read`, `Write`, and `Edit` as normal. fettle makes them work better.
 
 ## Install
 
@@ -54,6 +62,7 @@ Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks
 
 ```json
 {"tool_name": "Write", "tool_input": {"file_path": "/path/to/file", "content": "..."}}
+{"tool_name": "Edit", "tool_input": {"file_path": "/path/to/file", "old_string": "...", "new_string": "...", "replace_all": false}}
 ```
 
 fettle reads this JSON, decides whether to handle the tool call or let the builtin proceed, and responds:
@@ -76,6 +85,30 @@ When Claude calls `Read`:
 5. Files at or above the threshold are read by fettle directly, formatted with `cat -n` style line numbers, and returned as the deny reason. No size limits.
 
 The `offset` and `limit` parameters from the original Read tool are respected.
+
+### Edit Interception
+
+When Claude calls `Edit`, fettle runs through this decision tree:
+
+```
+File does not exist?
+  --> Deny with error. Edit requires an existing file.
+
+old_string == new_string?
+  --> Skip. Return "no changes" message. Done.
+
+old_string not found in file?
+  --> Deny with error + context snippet to help the agent find the right text.
+
+replace_all is false and old_string appears more than once?
+  --> Deny with error + occurrence count. Agent must provide more context or use replace_all.
+
+Otherwise:
+  --> Apply replacement (all occurrences if replace_all, otherwise the single match)
+  --> Feed result through the same Write protocol (diff, backup, tier classification)
+```
+
+Edit does **not** require a prior Read. fettle reads the file itself, validates the edit, applies it, and runs the result through the same backup/diff/staging protocol that Write uses. This eliminates the read-before-edit round trip.
 
 ### Write Interception
 
@@ -287,6 +320,7 @@ All limits were [empirically tested](https://github.com/coryzibell/fettle/issues
 | 2,000-line source file | Token error | Works |
 | 500KB log file | Size error | Works |
 | Write after creating file via shell | "Read it first" | Works |
+| Edit without prior Read | "Read it first" | Works |
 | 8MB PNG screenshot | Works | Passes through |
 | 50-page PDF | Works | Passes through |
 
