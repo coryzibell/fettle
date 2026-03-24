@@ -138,6 +138,7 @@ fn inject_settings_json() -> Result<bool, String> {
     // Write back with pretty formatting (2-space indent)
     let formatted =
         serde_json::to_string_pretty(&root).map_err(|e| format!("Failed to serialize JSON: {e}"))?;
+    let formatted = formatted + "\n";
 
     fs::write(&path, formatted.as_bytes())
         .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
@@ -262,11 +263,19 @@ mod tests {
         // SAFETY: tests using this helper are marked #[serial_test::serial]
         // so no concurrent mutation of environment variables occurs.
         unsafe { env::set_var("HOME", tmp.path()) };
-        f(tmp.path());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            f(tmp.path());
+        }));
+
         if let Some(h) = old_home {
             unsafe { env::set_var("HOME", h) };
         } else {
             unsafe { env::remove_var("HOME") };
+        }
+
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
         }
     }
 
@@ -322,6 +331,7 @@ mod tests {
 
             let path = home.join(".claude").join("settings.json");
             let contents = fs::read_to_string(path).unwrap();
+            assert!(contents.ends_with('\n'), "settings.json should end with a trailing newline");
             let root: Value = serde_json::from_str(&contents).unwrap();
             assert!(has_fettle_hook(&root["hooks"]["PreToolUse"]));
         });
@@ -455,6 +465,21 @@ mod tests {
             assert_eq!(arr.len(), 2); // original + fettle
             assert_eq!(arr[0]["matcher"], "Bash");
             assert!(has_fettle_hook(&root["hooks"]["PreToolUse"]));
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_inject_rejects_non_object_root() {
+        with_temp_home(|home| {
+            let claude_dir = home.join(".claude");
+            fs::create_dir_all(&claude_dir).unwrap();
+            let settings = claude_dir.join("settings.json");
+            fs::write(&settings, "[1, 2, 3]").unwrap();
+
+            let result = inject_settings_json();
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("not a JSON object"));
         });
     }
 }

@@ -63,9 +63,9 @@ pub enum Command {
 
     /// Install fettle as a Claude Code pre-tool-use hook.
     #[command(long_about = "Install fettle as a Claude Code pre-tool-use hook.\n\n\
-        Creates an executable hook script at ~/.claude/hooks/pre-tool-use/fettle \
-        that pipes tool call JSON to `fettle hook`. Safe to re-run (overwrites \
-        the existing hook script).")]
+        Registers the hook in ~/.claude/settings.json (primary) and creates a \
+        legacy hook script at ~/.claude/hooks/pre-tool-use/fettle (backwards \
+        compatibility). Safe to re-run (idempotent).")]
     Install,
 
     /// Show fettle configuration and status.
