@@ -196,6 +196,16 @@ Install fettle as a Claude Code pre-tool-use hook. Registers the hook in `~/.cla
 fettle install
 ```
 
+### `fettle uninstall`
+
+Remove fettle hooks from Claude Code configuration. Removes the hook entry from `~/.claude/settings.json` and deletes the legacy hook script at `~/.claude/hooks/pre-tool-use/fettle`. Safe to re-run (idempotent).
+
+```bash
+fettle uninstall
+```
+
+Does NOT delete backups, staged writes, or the fettle binary. To remove the binary: `cargo uninstall fettle`.
+
 ### `fettle info`
 
 Show current configuration, installation status, and the decision tree summary.

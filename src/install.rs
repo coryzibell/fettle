@@ -245,6 +245,139 @@ pub fn status() -> (bool, PathBuf) {
     (installed, hook_path)
 }
 
+/// Remove the fettle hook entry from ~/.claude/settings.json.
+///
+/// Returns Ok(true) if an entry was removed, Ok(false) if nothing was found.
+fn remove_settings_json() -> Result<bool, String> {
+    let path = settings_path();
+
+    // If settings.json doesn't exist, nothing to remove
+    let contents = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("Failed to read {}: {e}", path.display())),
+    };
+
+    // Parse as JSON
+    let mut root: Value = serde_json::from_str(&contents).map_err(|e| {
+        format!(
+            "Failed to parse {} as JSON: {e}\n\
+             Refusing to modify a malformed settings file.",
+            path.display()
+        )
+    })?;
+
+    // Navigate to hooks.PreToolUse -- if either is missing, nothing to remove
+    let Some(hooks_val) = root.get_mut("hooks") else {
+        return Ok(false);
+    };
+    let Some(hooks_obj) = hooks_val.as_object_mut() else {
+        return Ok(false);
+    };
+    let Some(pre_tool_use) = hooks_obj.get_mut("PreToolUse") else {
+        return Ok(false);
+    };
+    let Some(arr) = pre_tool_use.as_array_mut() else {
+        return Ok(false);
+    };
+
+    // Check if there's a fettle entry to remove
+    if !has_fettle_hook(&Value::Array(arr.clone())) {
+        return Ok(false);
+    }
+
+    // Filter out any entry whose hooks array contains {"command": "fettle hook"}
+    arr.retain(|entry| {
+        if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            !hooks
+                .iter()
+                .any(|hook| hook.get("command").and_then(|c| c.as_str()) == Some("fettle hook"))
+        } else {
+            true
+        }
+    });
+
+    // If PreToolUse is now empty, remove it
+    if arr.is_empty() {
+        hooks_obj.remove("PreToolUse");
+    }
+
+    // If hooks is now empty, remove it
+    if hooks_obj.is_empty() {
+        root.as_object_mut().unwrap().remove("hooks");
+    }
+
+    // Write back with pretty formatting (2-space indent) + trailing newline
+    let formatted = serde_json::to_string_pretty(&root)
+        .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
+    let formatted = formatted + "\n";
+
+    fs::write(&path, formatted.as_bytes())
+        .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+
+    Ok(true)
+}
+
+/// Remove the legacy hook script at ~/.claude/hooks/pre-tool-use/fettle.
+///
+/// Returns Ok(true) if the script was removed, Ok(false) if it didn't exist.
+fn remove_legacy_script() -> Result<bool, String> {
+    let hook_path = hooks_dir().join("fettle");
+
+    match fs::remove_file(&hook_path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("Failed to remove {}: {e}", hook_path.display())),
+    }
+}
+
+/// Uninstall fettle hooks from Claude Code configuration.
+///
+/// Removes the settings.json hook entry and the legacy hook script.
+/// Does NOT delete backups, staged writes, or the binary itself.
+pub fn uninstall() -> Result<String, String> {
+    let settings_removed = remove_settings_json()?;
+    let script_removed = remove_legacy_script()?;
+
+    if !settings_removed && !script_removed {
+        return Ok("fettle is not installed, nothing to remove.".to_string());
+    }
+
+    let settings_path = settings_path();
+    let script_path = hooks_dir().join("fettle");
+
+    let mut msg = String::from("fettle uninstalled successfully!\n\n");
+
+    if settings_removed {
+        msg.push_str(&format!(
+            "  Settings: {} (hook entry removed)\n",
+            settings_path.display()
+        ));
+    } else {
+        msg.push_str(&format!(
+            "  Settings: {} (no hook entry found)\n",
+            settings_path.display()
+        ));
+    }
+
+    if script_removed {
+        msg.push_str(&format!(
+            "  Script:   {} (removed)\n",
+            script_path.display()
+        ));
+    } else {
+        msg.push_str(&format!(
+            "  Script:   {} (not found)\n",
+            script_path.display()
+        ));
+    }
+
+    msg.push_str("\nPreserved: backups, staged writes, and the fettle binary.\n");
+    msg.push_str("To remove the binary: cargo uninstall fettle\n");
+
+    Ok(msg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +606,122 @@ mod tests {
             let result = inject_settings_json();
             assert!(result.is_err());
             assert!(result.unwrap_err().contains("not a JSON object"));
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_removes_settings_json_entry() {
+        with_temp_home(|home| {
+            // Install first
+            inject_settings_json().unwrap();
+            assert!(settings_json_installed());
+
+            // Uninstall
+            let result = remove_settings_json();
+            assert!(result.is_ok());
+            assert!(result.unwrap()); // was removed
+
+            // Verify entry is gone
+            assert!(!settings_json_installed());
+
+            // Verify file still exists and is valid JSON
+            let path = home.join(".claude").join("settings.json");
+            let contents = fs::read_to_string(&path).unwrap();
+            let root: Value = serde_json::from_str(&contents).unwrap();
+            assert!(root.is_object());
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_preserves_other_hooks() {
+        with_temp_home(|home| {
+            // Set up settings with another hook + fettle
+            let claude_dir = home.join(".claude");
+            fs::create_dir_all(&claude_dir).unwrap();
+            let settings = claude_dir.join("settings.json");
+            fs::write(
+                &settings,
+                r#"{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "other-tool"}]}, {"matcher": "Read|Write|Edit", "hooks": [{"type": "command", "command": "fettle hook"}]}]}}"#,
+            )
+            .unwrap();
+
+            // Uninstall
+            let result = remove_settings_json();
+            assert!(result.is_ok());
+            assert!(result.unwrap());
+
+            // Verify fettle is gone but the other hook remains
+            let contents = fs::read_to_string(&settings).unwrap();
+            let root: Value = serde_json::from_str(&contents).unwrap();
+            let arr = root["hooks"]["PreToolUse"].as_array().unwrap();
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0]["matcher"], "Bash");
+            assert!(!has_fettle_hook(&root["hooks"]["PreToolUse"]));
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_cleans_empty_hooks() {
+        with_temp_home(|home| {
+            // Install fettle as the only hook
+            inject_settings_json().unwrap();
+            assert!(settings_json_installed());
+
+            // Uninstall
+            let result = remove_settings_json();
+            assert!(result.is_ok());
+            assert!(result.unwrap());
+
+            // Verify hooks key is cleaned up entirely
+            let path = home.join(".claude").join("settings.json");
+            let contents = fs::read_to_string(&path).unwrap();
+            let root: Value = serde_json::from_str(&contents).unwrap();
+            assert!(
+                root.get("hooks").is_none(),
+                "hooks key should be removed when empty"
+            );
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_idempotent() {
+        with_temp_home(|_home| {
+            // Nothing is installed -- uninstall should succeed gracefully
+            let result = remove_settings_json();
+            assert!(result.is_ok());
+            assert!(!result.unwrap()); // nothing was found
+
+            // Also test the full uninstall function
+            let msg = uninstall().unwrap();
+            assert!(msg.contains("not installed"));
+        });
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_uninstall_removes_legacy_script() {
+        with_temp_home(|home| {
+            // Create the legacy script
+            let script_dir = home.join(".claude").join("hooks").join("pre-tool-use");
+            fs::create_dir_all(&script_dir).unwrap();
+            let script_path = script_dir.join("fettle");
+            fs::write(&script_path, "#!/bin/sh\nexec fettle hook\n").unwrap();
+            assert!(script_path.exists());
+
+            // Remove it
+            let result = remove_legacy_script();
+            assert!(result.is_ok());
+            assert!(result.unwrap()); // was removed
+            assert!(!script_path.exists());
+
+            // Second call should return false (idempotent)
+            let result = remove_legacy_script();
+            assert!(result.is_ok());
+            assert!(!result.unwrap());
         });
     }
 }

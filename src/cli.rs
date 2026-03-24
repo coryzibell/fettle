@@ -68,6 +68,14 @@ pub enum Command {
         compatibility). Safe to re-run (idempotent).")]
     Install,
 
+    /// Remove fettle hooks from Claude Code configuration.
+    #[command(long_about = "Remove fettle hooks from Claude Code configuration.\n\n\
+        Removes the hook entry from ~/.claude/settings.json and deletes the \
+        legacy hook script at ~/.claude/hooks/pre-tool-use/fettle.\n\n\
+        Does NOT delete backups, staged writes, or the fettle binary itself.\n\
+        To remove the binary: cargo uninstall fettle")]
+    Uninstall,
+
     /// Show fettle configuration and status.
     #[command(
         long_about = "Show current fettle configuration and installation status.\n\n\
