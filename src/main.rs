@@ -1,6 +1,7 @@
 mod backup;
 mod cli;
 mod diff;
+mod edit_diagnose;
 mod filetype;
 mod hook;
 mod info;
@@ -128,6 +129,19 @@ fn run_cli_mode() -> ExitCode {
             print_status();
             ExitCode::SUCCESS
         }
+        cli::Command::EditDiagnose {
+            file_path,
+            search_string,
+        } => match edit_diagnose::run(&file_path, &search_string) {
+            Ok(output) => {
+                print!("{output}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("fettle: {e}");
+                ExitCode::FAILURE
+            }
+        },
         cli::Command::Hook => {
             // Normally intercepted by the early detection in main(),
             // but handle here for completeness if clap parses it.

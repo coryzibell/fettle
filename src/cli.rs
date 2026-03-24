@@ -122,4 +122,25 @@ pub enum Command {
         Lists all Tier 2 sessions awaiting confirmation and all backup files \
         created in the last 24 hours.")]
     Status,
+
+    /// Diagnose why an Edit tool search string was not found.
+    #[command(
+        name = "edit-diagnose",
+        long_about = "Diagnose why an Edit tool search string was not found.\n\n\
+        When Claude Code's Edit tool reports \"String to replace not found\", run this \
+        command to understand why. It searches the file for the exact string and, if \
+        not found, shows near-matches with context, highlights likely causes (whitespace, \
+        indentation, line endings), and reports match locations if the string does exist.\n\n\
+        Example:\n  \
+          fettle edit-diagnose src/main.rs 'fn main()'"
+    )]
+    EditDiagnose {
+        /// Path to the file that was being edited
+        #[arg(value_name = "FILE")]
+        file_path: PathBuf,
+
+        /// The search string (old_string) that was not found
+        #[arg(value_name = "SEARCH_STRING")]
+        search_string: String,
+    },
 }
